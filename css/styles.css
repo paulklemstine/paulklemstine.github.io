@@ -84,12 +84,7 @@ a:hover, a:visited {
     text-decoration: underline;
 }
 
-nav a:active, nav a:link {
-    color: #05a0fa;
-    text-decoration: none;
-}
-
-nav a:hover, nav a:visited {
+nav a:active, nav a:link,a:hover, nav a:visited {
     color: #ffffff;
     text-decoration: underline;
 }
