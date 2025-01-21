@@ -74,14 +74,9 @@ p, blockquote {
     margin: 15px;
 }
 
-a:active, a:link {
+a:active, a:link, a:hover, a:visited {
     color: #fa0505;
     text-decoration: none;
-}
-
-a:hover, a:visited {
-    color: #f4e302;
-    text-decoration: underline;
 }
 
 nav a:active, nav a:link,a:hover, nav a:visited {
