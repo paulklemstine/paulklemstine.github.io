@@ -9,8 +9,5 @@ if (isMorning) message = 'Good Morning!'
 else if (isAfternoon) message = 'Good Afternoon!'
 else if (isEvening) message = 'Good Evening!'
 
-
-console.log(message)
-
 const welcomeDiv =document.querySelector("#welcome")
 welcomeDiv.innerHTML = message
