@@ -11,3 +11,8 @@ else if (isEvening) message = 'Good Evening!'
 
 const welcomeDiv =document.querySelector("#welcome")
 welcomeDiv.innerHTML = message
+
+//set a secret message
+const key="It's a secret to everybody."
+const response="Shhh... it's a Punch and Judy kind of secret."
+localStorage.setItem(key,response);
