@@ -59,3 +59,31 @@ btnNext.addEventListener('click',() =>{
     currentImage = (currentImage+1)%urls.length;
     showImages();
 });
+
+//get random pokemon image - Week 8
+//IIFE
+(async () => {
+ 
+    //return a random pokemon fetched from the pokeapi
+    const getRandomPokemon = async () => {
+        const url = 'https://pokeapi.co/api/v2/pokemon/' + Math.floor(Math.random() * 150)
+        const response = await fetch(url)
+        const json = pokemon = await response.json()
+        console.log(json)
+        return json
+    }
+
+    //render pokemon json to a #pokemon div
+    const renderPokemon = pokemon =>{
+        const imageDiv=document.querySelector("#pokemon");
+        const img = document.createElement('img')
+        img.src = pokemon.sprites.front_default
+        img.alt = pokemon.name
+        img.style.border = "none"
+        imageDiv.append(img)
+    }
+    
+    //run on init
+    const randomPokemon = await getRandomPokemon()
+    renderPokemon(randomPokemon)
+})()

@@ -369,3 +369,10 @@ ol li {
     gap: 10px;
     margin-top: 10px;
 }
+
+#pokemon{
+    position: absolute;
+    top:125px;
+    left:50%;
+    transform: translateX(-50%);
+}
