@@ -60,6 +60,33 @@ btnNext.addEventListener('click',() =>{
     showImages();
 });
 
+
+//to do list
+
+//look up todo-list from localStorage and display it in the hthml
+const renderTodos = () =>{
+    const todos = JSON.parse(localStorage.getItem('todo-list')) || []
+    const todoList = document.querySelector('.todo-list')
+    todoList.innerHTML = ''
+    todos.forEach(todo =>{
+        const li = document.createElement('li')
+        li.textContent = todo.text
+        todoList.append(li)
+    })
+}
+
+//render todos on init
+renderTodos()
+
+//add button click listener, add and save the todo
+const addTodo = document.getElementById('add-todo')
+addTodo.addEventListener('click',() =>{
+    const todos = JSON.parse(localStorage.getItem('todo-list')) || []
+    todos.push({ text: document.getElementById('new-todo').value, completed: false })
+    localStorage.setItem('todo-list', JSON.stringify(todos))
+    renderTodos()
+});
+
 //get random pokemon image - Week 8
 //IIFE
 (async () => {
@@ -74,7 +101,7 @@ btnNext.addEventListener('click',() =>{
 
     //render pokemon json to a #pokemon div
     const renderPokemon = pokemon =>{
-        const imageDiv=document.querySelector("#pokemon");
+        const imageDiv=document.getElementById('pokemon');
         const img = document.createElement('img')
         img.src = pokemon.sprites.front_default
         img.alt = pokemon.name
