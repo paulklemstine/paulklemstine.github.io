@@ -69,7 +69,6 @@ btnNext.addEventListener('click',() =>{
         const url = 'https://pokeapi.co/api/v2/pokemon/' + Math.floor(Math.random() * 150)
         const response = await fetch(url)
         const json = pokemon = await response.json()
-        console.log(json)
         return json
     }
 
