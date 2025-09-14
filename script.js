@@ -1855,6 +1855,7 @@ function handleError(type, error) {
 // --- UI Rendering ---
 
 function renderGlobalRoomList() {
+    if (isDateActive) return; // Do not render the room list if a date is active
     const roomListContainer = document.getElementById('room-list');
     const directoryContainer = document.getElementById('global-directory-container');
     if (!roomListContainer || !directoryContainer) return;
@@ -1986,6 +1987,10 @@ resetGameButton.addEventListener('click', () => {
 
 /** Renders the lobby UI */
 function renderLobby() {
+    if (isDateActive) {
+        console.log("renderLobby call ignored: a date is active.");
+        return;
+    }
     console.log("Entering renderLobby with dynamic profiles.");
     if (!lobbyContainer) return;
 
@@ -2155,7 +2160,9 @@ function startNewDate(partnerId, iAmPlayer1) {
     turnSubmissions.clear(); // Ensure clean state for the new date
 
     // Hide lobby, show game
-    lobbyContainer.style.display = 'none';
+    const directoryContainer = document.getElementById('global-directory-container');
+    if(directoryContainer) directoryContainer.style.display = 'none';
+    if(lobbyContainer) lobbyContainer.style.display = 'none';
     if(gameWrapper) gameWrapper.style.display = 'block';
 
     const partnerMasterId = MPLib.getRoomConnections()?.get(partnerId)?.metadata?.masterId;
