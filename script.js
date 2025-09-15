@@ -715,6 +715,7 @@ function checkForTurnCompletion() {
         turnSubmissions.clear();
     }
 });
+}
 
 async function initiateSinglePlayerTurn(turnData, history = []) {
     console.log("Initiating single-player turn...");
