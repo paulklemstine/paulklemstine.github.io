@@ -50,15 +50,15 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
     // This is the addendum for the Orchestrator on the first turn.
     firstrun_addendum: `
 // ### FIRST TURN DIRECTIVE ###
-// This is the VERY FIRST TURN of a new blind date. The provided player inputs and notes are placeholders.
+// This is the VERY FIRST TURN of a new blind date. The provided player inputs and notes are placeholders, but the notes contain the SCENE for the date, which you MUST use.
 //
 // **YOUR PRIMARY TASK:**
-// 1.  **Invent a Scene:** Create a compelling, original blind date scenario. Choose a location (e.g., a quirky bookstore, a slightly-too-fancy restaurant, a foggy pier, a late-night diner) and a mood (e.g., awkward, tense, exciting, mysterious).
-// 2.  **Write a Shared Narrative:** Your first output section (before the first '---|||---') MUST be a shared narrative describing this scene from a neutral, third-person perspective. Set the stage for both players.
+// 1.  **Use the Provided Scene:** The scene for the date has been determined by a minigame and is included in the 'notes' for each player. You MUST use this exact scene. DO NOT invent a new one.
+// 2.  **Write a Shared Narrative:** Your first output section (before the first '---|||---') MUST be a shared narrative describing this scene from a neutral, third-person perspective. Set the stage for both players based on the provided scene.
 // 3.  **Generate Separate Instructions:** For BOTH Player A and Player B, you MUST generate a complete and unique set of instructions for the Dr. Gemini UI generator.
 //     - **Asymmetry is Key:** The instructions should be different for each player, reflecting their slightly different situations (e.g., one arrived first, one is just walking in).
 //     - **Mandatory Probes:** You MUST instruct Dr. Gemini to include probes for 'player_name' and 'player_gender' for both players. This is non-negotiable for the first turn. You should also instruct it to ask for at least one other physical attribute.
-//     - **Initial Notes:** For each player, you MUST include the complete, updated 'notes' markdown. Use the template provided in the main orchestrator prompt to initialize the notes for the first time. Fill in the 'subjectId' and other relevant fields based on the scene you've invented.
+//     - **Initial Notes:** For each player, you MUST include the complete, updated 'notes' markdown. Use the template provided in the main orchestrator prompt to initialize the notes for the first time. Fill in the 'subjectId' and other relevant fields based on the scene provided.
 `,
 
     // The orchestrator is now simpler. It just provides the turn-specific instructions
