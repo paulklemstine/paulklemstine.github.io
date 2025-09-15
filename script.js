@@ -2805,7 +2805,7 @@ window.hideInterstitial = function() {
 function populateSpinner(spinnerIndex, items, categoryName) {
     const wheelElement = document.getElementById(`spinner-wheel-${spinnerIndex}`);
     const legendElement = document.getElementById(`spinner-legend-${spinnerIndex}`);
-    const titleElement = document.getElementById(`spinner-1-title`);
+    const titleElement = document.getElementById(`spinner-${spinnerIndex}-title`);
     if (!wheelElement || !legendElement || !titleElement) return;
 
     wheelElement.innerHTML = '';
