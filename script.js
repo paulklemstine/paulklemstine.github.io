@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, sceneFeatures} from './prompts.js';
+import {geemsPrompts, sceneFeatures, getDynamicWildcards} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -2015,17 +2015,14 @@ function handleRoomDataReceived(senderId, data) {
             break;
 
         case 'spinner_state_update':
-            if (isSpinnerRunning && !amIPlayer1) {
-                const { angle } = data.payload;
-                spinnerAngle = angle;
+            // This is now handled by a dedicated function for clarity
+            if (data.payload && data.payload.spinners) {
+                handleSpinnerStateUpdate(data.payload.spinners);
             }
             break;
-        case 'spinner_result':
-            if (isSpinnerRunning && !amIPlayer1) {
-                const { result, finalAngle } = data.payload;
-                endSpinner(result, finalAngle);
-            }
-            break;
+        // The 'spinner_result' case is now obsolete, as the final result is
+        // part of the continuous state update. P1 calls endSpinner directly,
+        // and P2 calls it when all spinners stop spinning in the state update.
 
         case 'minigame_move':
             if (minigameActive && !partnerMove) {
@@ -2444,22 +2441,60 @@ function startNewDate(partnerId, iAmPlayer1) {
     startSceneSelection();
 }
 
-function startSceneSelection() {
-    console.log("Starting scene selection...");
+async function startSceneSelection() {
+    console.log("Starting scene selection with 3 categories...");
     uiContainer.innerHTML = `<div class="text-center p-8"><h2>Let's set the scene...</h2><p>Choose some elements for your first date. Your choices will be combined with your partner's to create the setting.</p></div>`;
 
-    const selectionUI = [];
-    const locationOptions = sceneFeatures.locations.sort(() => 0.5 - Math.random()).slice(0, 4);
-    const vibeOptions = sceneFeatures.vibes.sort(() => 0.5 - Math.random()).slice(0, 4);
+    const selectionGrid = document.createElement('div');
+    selectionGrid.className = 'scene-selection-grid'; // A new class for styling the grid
 
+    // Create columns for each category
+    const locationColumn = document.createElement('div');
+    const vibeColumn = document.createElement('div');
+    const wildcardColumn = document.createElement('div');
+
+    locationColumn.innerHTML = '<h3>Locations</h3>';
+    vibeColumn.innerHTML = '<h3>Vibes</h3>';
+    wildcardColumn.innerHTML = '<h3>Wildcards</h3>';
+
+    // Populate Locations
+    const locationOptions = [...sceneFeatures.locations].sort(() => 0.5 - Math.random()).slice(0, 5);
     locationOptions.forEach(loc => {
-        selectionUI.push({ type: 'checkbox', name: `loc_${loc.replace(/\s+/g, '_')}`, label: loc, value: false, color: '#FFFFFF' });
-    });
-    vibeOptions.forEach(vibe => {
-        selectionUI.push({ type: 'checkbox', name: `vibe_${vibe.replace(/\s+/g, '_')}`, label: vibe, value: false, color: '#FFFFFF' });
+        const checkbox = createSelectionCheckbox('location', loc);
+        locationColumn.appendChild(checkbox);
     });
 
-    renderUI(selectionUI);
+    // Populate Vibes
+    const vibeOptions = [...sceneFeatures.vibes].sort(() => 0.5 - Math.random()).slice(0, 5);
+    vibeOptions.forEach(vibe => {
+        const checkbox = createSelectionCheckbox('vibe', vibe);
+        vibeColumn.appendChild(checkbox);
+    });
+
+    // Populate Wildcards (Static + Dynamic)
+    const staticWildcards = [...sceneFeatures.wildcards].sort(() => 0.5 - Math.random()).slice(0, 3);
+    staticWildcards.forEach(wc => {
+        const checkbox = createSelectionCheckbox('wildcard', wc);
+        wildcardColumn.appendChild(checkbox);
+    });
+
+    // Add a placeholder while dynamic wildcards load
+    const dynamicLoadingPlaceholder = document.createElement('div');
+    dynamicLoadingPlaceholder.className = 'geems-checkbox-option disabled';
+    dynamicLoadingPlaceholder.textContent = 'Generating ideas...';
+    wildcardColumn.appendChild(dynamicLoadingPlaceholder);
+
+    selectionGrid.append(locationColumn, vibeColumn, wildcardColumn);
+    uiContainer.appendChild(selectionGrid);
+
+    // Fetch and populate dynamic wildcards
+    getDynamicWildcards(callGeminiApiWithRetry).then(dynamicWildcards => {
+        dynamicLoadingPlaceholder.remove(); // Remove placeholder
+        dynamicWildcards.slice(0, 2).forEach(wc => { // Take up to 2 dynamic ones
+            const checkbox = createSelectionCheckbox('wildcard', wc);
+            wildcardColumn.appendChild(checkbox);
+        });
+    });
 
     const submitSelectionsButton = document.createElement('button');
     submitSelectionsButton.id = 'submit-scene-selections';
@@ -2468,10 +2503,12 @@ function startSceneSelection() {
     uiContainer.appendChild(submitSelectionsButton);
 
     submitSelectionsButton.onclick = () => {
-        const selections = {};
-        uiContainer.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-            if (checkbox.checked) {
-                selections[checkbox.name] = checkbox.labels[0].textContent;
+        const selections = { location: [], vibe: [], wildcard: [] };
+        uiContainer.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
+            const category = checkbox.dataset.category;
+            const label = checkbox.parentElement.querySelector('label').textContent;
+            if (selections[category]) {
+                selections[category].push(label);
             }
         });
 
@@ -2486,27 +2523,65 @@ function startSceneSelection() {
     };
 }
 
+function createSelectionCheckbox(category, label) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'geems-checkbox-option';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = `${category}_${label.replace(/\s+/g, '_')}`;
+    input.name = `${category}_${label.replace(/\s+/g, '_')}`;
+    input.dataset.category = category;
+    const labelEl = document.createElement('label');
+    labelEl.htmlFor = input.id;
+    labelEl.textContent = label;
+    wrapper.appendChild(input);
+    wrapper.appendChild(labelEl);
+    return wrapper;
+}
+
 function checkForSceneSelectionCompletion() {
     if (sceneSelections.size < 2) {
         return;
     }
     console.log("Both players have submitted scene selections.");
 
-    const allSelections = [];
+    // Aggregate selections from both players for each category
+    const combinedSelections = { location: [], vibe: [], wildcard: [] };
     for (const selections of sceneSelections.values()) {
-        for (const key in selections) {
-            allSelections.push(selections[key]);
+        for (const category in selections) {
+            if (combinedSelections[category]) {
+                combinedSelections[category].push(...selections[category]);
+            }
         }
     }
 
-    const uniqueSelections = [...new Set(allSelections)];
-    console.log("Combined unique selections for spinner:", uniqueSelections);
+    // Get unique items for each category
+    const finalLocationItems = [...new Set(combinedSelections.location)];
+    const finalVibeItems = [...new Set(combinedSelections.vibe)];
+    const finalWildcardItems = [...new Set(combinedSelections.wildcard)];
 
-    startSpinner(uniqueSelections, (winningScene) => {
-        if (amIPlayer1) {
-            fetchFirstTurn(null, winningScene); // No minigame winner for this flow
-        }
+    console.log("Final items for spinners:", {
+        locations: finalLocationItems,
+        vibes: finalVibeItems,
+        wildcards: finalWildcardItems
     });
+
+    // Pass the arrays of items to the new startSpinner function
+    startSpinner(
+        [
+            { title: 'Location', items: finalLocationItems },
+            { title: 'Vibe', items: finalVibeItems },
+            { title: 'Wildcard', items: finalWildcardItems }
+        ],
+        (winningResults) => {
+            if (amIPlayer1) {
+                // Combine the results into a single scene description
+                const winningScene = `${winningResults[0]} with a ${winningResults[1].toLowerCase()} vibe, when suddenly ${winningResults[2].toLowerCase()}.`;
+                console.log("Final winning scene:", winningScene);
+                fetchFirstTurn(null, winningScene);
+            }
+        }
+    );
 }
 
 async function fetchFirstTurn(minigameWinner, scene) {
@@ -2788,138 +2863,209 @@ window.hideInterstitial = function() {
 
 // --- Spinner Mini-Game Functions ---
 
-function populateSpinner(wheelElement, items) {
-    if (!wheelElement) return;
+let activeSpinners = [];
+
+function populateSpinner(wheelElement, legendElement, spinnerData) {
+    if (!wheelElement || !legendElement) return;
     wheelElement.innerHTML = '';
+    legendElement.innerHTML = `<h4>${spinnerData.title}</h4>`;
 
+    const { items } = spinnerData;
     const numSegments = items.length;
-    if (numSegments === 0) return;
-    const anglePerSegment = 360 / numSegments;
+    if (numSegments === 0) {
+        wheelElement.textContent = "No items";
+        return;
+    }
 
+    const anglePerSegment = 360 / numSegments;
     const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+    const symbols = ["❤️", "⭐", "💎", "🍀", "💧", "🌙", "💜", "✨"];
 
     items.forEach((item, index) => {
         const segment = document.createElement('div');
         segment.className = 'spinner-segment';
-
         const content = document.createElement('div');
         content.className = 'segment-content';
-        content.textContent = item;
 
-        segment.style.backgroundColor = colors[index % colors.length];
+        const color = colors[index % colors.length];
+        const symbol = symbols[index % symbols.length];
+
+        segment.style.backgroundColor = color;
+        content.textContent = symbol;
+        spinnerData.segmentSymbols[index] = symbol; // Store the symbol
 
         const rotation = index * anglePerSegment;
         segment.style.transform = `rotate(${rotation}deg)`;
-
         const contentRotation = anglePerSegment / 2;
-        content.style.transform = `rotate(${contentRotation}deg) translate(0px, -50%)`;
-        content.style.left = '50%';
-        content.style.top = '25%';
+        content.style.transform = `rotate(${contentRotation}deg) translate(0, -50%)`;
 
         wheelElement.appendChild(segment);
         segment.appendChild(content);
+
+        // Add to legend
+        const legendItem = document.createElement('div');
+        legendItem.className = 'legend-item';
+        legendItem.innerHTML = `<span class="legend-symbol" style="color: ${color};">${symbol}</span> ${item}`;
+        legendElement.appendChild(legendItem);
     });
 }
 
-function startSpinner(items, onComplete) {
-    console.log(`Starting scene spinner...`);
-    isSpinnerRunning = true;
+function startSpinner(spinnersData, onComplete) {
+    console.log(`Starting ${spinnersData.length} spinners...`);
     spinnerCompletionCallback = onComplete;
+    activeSpinners = [];
 
-    spinnerAngle = 0;
+    const spinnersArea = document.getElementById('spinners-area');
+    spinnersArea.innerHTML = '';
 
     if (spinnerModal) {
         spinnerTitle.textContent = 'Spinning for the Scene!';
         spinnerModal.style.display = 'flex';
     }
-    if (spinnerWheel) spinnerWheel.style.transition = 'none';
     if (spinnerResult) spinnerResult.style.display = 'none';
 
-    populateSpinner(spinnerWheel, items);
+    spinnersData.forEach((data, index) => {
+        const spinnerUnit = document.createElement('div');
+        spinnerUnit.className = 'spinner-unit';
+
+        const container = document.createElement('div');
+        container.className = 'spinner-container';
+        const pointer = document.createElement('div');
+        pointer.className = 'spinner-pointer';
+        const wheel = document.createElement('div');
+        wheel.className = 'spinner-wheel';
+        wheel.id = `spinner-wheel-${index}`;
+        container.append(pointer, wheel);
+
+        const legend = document.createElement('div');
+        legend.className = 'spinner-legend';
+        legend.id = `spinner-legend-${index}`;
+
+        spinnerUnit.append(container, legend);
+        spinnersArea.appendChild(spinnerUnit);
+
+        const spinnerState = {
+            id: index,
+            wheelElement: wheel,
+            items: data.items,
+            angle: 0,
+            velocity: 0,
+            isSpinning: false,
+            result: null,
+            segmentSymbols: {}
+        };
+        activeSpinners.push(spinnerState);
+
+        populateSpinner(wheel, legend, { ...data, segmentSymbols: spinnerState.segmentSymbols });
+
+        if (amIPlayer1) {
+            spinnerState.isSpinning = true;
+            spinnerState.velocity = 5 + Math.random() * 5; // Radians per second
+        }
+    });
 
     if (amIPlayer1) {
-        spinnerVelocity = 5 + Math.random() * 5;
-        lastSpinnerFrameTime = performance.now();
-        requestAnimationFrame(runSpinnerAnimation);
-    } else {
         lastSpinnerFrameTime = performance.now();
         requestAnimationFrame(runSpinnerAnimation);
     }
 }
 
 function runSpinnerAnimation(currentTime) {
-    if (!isSpinnerRunning) return;
-
-    if (lastSpinnerFrameTime === 0) {
-        lastSpinnerFrameTime = currentTime;
-        requestAnimationFrame(runSpinnerAnimation);
+    if (activeSpinners.every(s => !s.isSpinning)) {
+        if (amIPlayer1) endSpinner();
         return;
     }
 
     const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
     lastSpinnerFrameTime = currentTime;
 
+    let stillSpinningCount = 0;
+    activeSpinners.forEach(spinner => {
+        if (!spinner.isSpinning) return;
+
+        if (amIPlayer1) {
+            spinner.velocity *= Math.pow(FRICTION, deltaTime * 60);
+            if (Math.abs(spinner.velocity) < MIN_SPINNER_VELOCITY) {
+                spinner.velocity = 0;
+                spinner.isSpinning = false;
+                // Determine result now that it has stopped
+                const numSegments = spinner.items.length;
+                if (numSegments > 0) {
+                    const anglePerSegment = 360 / numSegments;
+                    const finalAngleDegrees = (spinner.angle * 180 / Math.PI);
+                    const pointerAngle = 270;
+                    const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
+                    const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
+                    spinner.result = spinner.items[winningSegmentIndex];
+                    console.log(`Spinner ${spinner.id} stopped. Result: ${spinner.result}`);
+                }
+            } else {
+                stillSpinningCount++;
+            }
+            spinner.angle += spinner.velocity * deltaTime;
+        }
+
+        spinner.wheelElement.style.transform = `rotate(${spinner.angle}rad)`;
+    });
+
     if (amIPlayer1) {
-        if (spinnerVelocity !== 0) {
-            spinnerVelocity *= Math.pow(FRICTION, deltaTime * 60);
-        }
-        spinnerAngle += spinnerVelocity * deltaTime;
-
-        if (Math.abs(spinnerVelocity) < MIN_SPINNER_VELOCITY) {
-            spinnerVelocity = 0;
-            isSpinnerRunning = false;
-
-            const items = [...sceneSelections.values()].flatMap(sel => Object.values(sel));
-            const uniqueItems = [...new Set(items)];
-            const numSegments = uniqueItems.length;
-            const anglePerSegment = 360 / numSegments;
-            const finalAngleDegrees = (spinnerAngle * 180 / Math.PI);
-            const pointerAngle = 270;
-            const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
-            const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
-            const result = uniqueItems[winningSegmentIndex];
-
-            console.log(`Spinner stopped. Result: ${result}`);
-
-            const resultPayload = { result: result, finalAngle: spinnerAngle };
-            MPLib.broadcastToRoom({ type: 'spinner_result', payload: resultPayload });
-            endSpinner(result, spinnerAngle);
-            return;
-        }
-
-        MPLib.broadcastToRoom({
-            type: 'spinner_state_update',
-            payload: { angle: spinnerAngle }
-        });
-    }
-
-    if (spinnerWheel) {
-        spinnerWheel.style.transform = `rotate(${spinnerAngle}rad)`;
+        const spinnerStates = activeSpinners.map(s => ({
+            id: s.id,
+            angle: s.angle,
+            isSpinning: s.isSpinning,
+            result: s.result
+        }));
+        MPLib.broadcastToRoom({ type: 'spinner_state_update', payload: { spinners: spinnerStates } });
     }
 
     requestAnimationFrame(runSpinnerAnimation);
 }
 
-function endSpinner(result, finalAngle) {
+function endSpinner() {
     isSpinnerRunning = false;
-    lastSpinnerFrameTime = 0;
+    const finalResults = activeSpinners.map(s => s.result).filter(Boolean);
 
-    if (spinnerWheel) {
-        spinnerWheel.style.transition = 'transform 2s ease-out';
-        spinnerWheel.style.transform = `rotate(${finalAngle}rad)`;
-    }
+    console.log("All spinners stopped. Final results:", finalResults);
 
-    if (spinnerResult) {
-        spinnerResult.textContent = `Scene: ${result}!`;
-        spinnerResult.style.display = 'block';
-    }
-
-    setTimeout(() => {
-        if (spinnerModal) spinnerModal.style.display = 'none';
-        if (spinnerCompletionCallback) {
-            spinnerCompletionCallback(result);
+    if (finalResults.length === activeSpinners.length) {
+        if (spinnerResult) {
+            spinnerResult.innerHTML = `Your scene: <br><strong>${finalResults.join(' / ')}</strong>`;
+            spinnerResult.style.display = 'block';
         }
-    }, 4000);
+
+        setTimeout(() => {
+            if (spinnerModal) spinnerModal.style.display = 'none';
+            if (spinnerCompletionCallback) {
+                spinnerCompletionCallback(finalResults);
+            }
+            activeSpinners = [];
+        }, 4000);
+    } else {
+        console.error("Mismatch in spinner results. Aborting.");
+    }
+}
+
+// Handler for incoming state updates from Player 1
+function handleSpinnerStateUpdate(spinnersState) {
+    if (amIPlayer1) return;
+
+    spinnersState.forEach(state => {
+        const localSpinner = activeSpinners.find(s => s.id === state.id);
+        if (localSpinner) {
+            localSpinner.angle = state.angle;
+            localSpinner.isSpinning = state.isSpinning;
+            localSpinner.result = state.result;
+            localSpinner.wheelElement.style.transform = `rotate(${state.angle}rad)`;
+        }
+    });
+
+    // If all have stopped, end the spinner on the client side
+    if (spinnersState.every(s => !s.isSpinning)) {
+        endSpinner();
+    } else {
+         // keep animation frame running
+        requestAnimationFrame(runSpinnerAnimation);
+    }
 }
 
 // Ensure DOM is fully loaded before initializing

@@ -127,4 +127,26 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 export const sceneFeatures = {
     locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
     vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
+    wildcards: ["a sudden downpour", "a shared, unusual dessert", "a street performer interrupts", "a power outage", "an old photograph is found", "a cryptic note is passed"]
 };
+
+/**
+ * Uses a quick flash LLM call to generate a few extra, creative wildcard options for the scene setup.
+ * @param {Function} llmApiCall - The function to call the Gemini API.
+ * @returns {Promise<string[]>} A promise that resolves to an array of new wildcard strings.
+ */
+export async function getDynamicWildcards(llmApiCall) {
+    const prompt = `You are a creative writing assistant. Brainstorm 4 brief, unexpected, and evocative events or elements that could happen on a first date. They should be 2-5 words each. Return ONLY a JSON array of strings. For example: ["a shared dream", "a forgotten song plays", "a blackout", "a mysterious stranger appears"]`;
+    try {
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const wildcards = JSON.parse(responseJson);
+        if (Array.isArray(wildcards) && wildcards.every(item => typeof item === 'string')) {
+            return wildcards;
+        }
+        console.warn("Dynamic wildcards response was not a valid string array:", wildcards);
+        return [];
+    } catch (error) {
+        console.error("Failed to get dynamic wildcards from LLM:", error);
+        return []; // Return an empty array on error to not break the game
+    }
+}
