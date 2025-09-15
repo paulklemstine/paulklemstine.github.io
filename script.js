@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, sceneFeatures} from './prompts.js';
+import {geemsPrompts, sceneFeatures, spinnerPrompts} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -18,13 +18,16 @@ let localGameStateSnapshot = null; // To store local state when viewing remote s
 let llmCallHistory = []; // For the debug panel
 
 // --- Spinner State ---
-let isSpinnerRunning = false;
+let spinners = {
+    locations: { angle: 0, velocity: 0, result: null, items: [], wheelElement: null, isRunning: false },
+    vibes: { angle: 0, velocity: 0, result: null, items: [], wheelElement: null, isRunning: false },
+    wildcards: { angle: 0, velocity: 0, result: null, items: [], wheelElement: null, isRunning: false }
+};
 let spinnerCompletionCallback = null;
-let spinnerAngle = 0;
-let spinnerVelocity = 0;
 let lastSpinnerFrameTime = 0;
 const FRICTION = 0.99;
 const MIN_SPINNER_VELOCITY = 0.005;
+let isSpinning = false; // A global flag for all spinners
 
 // --- Minigame State ---
 let minigameActive = false;
@@ -102,7 +105,6 @@ const receiverTeaseButton = document.getElementById('receiver-tease-button');
 // --- Spinner Elements ---
 const spinnerModal = document.getElementById('spinner-modal');
 const spinnerTitle = document.getElementById('spinner-title');
-const spinnerWheel = document.getElementById('spinner-wheel');
 const spinnerResult = document.getElementById('spinner-result');
 
 // --- Web Audio API Context ---
@@ -378,6 +380,46 @@ function generateAvatarPrompt(profile) {
     return promptParts.join(', ');
 }
 
+
+async function getSpinnerItemsFromLLM() {
+    console.log("Requesting spinner items from LLM...");
+    try {
+        // We want to use the "flash" model for this for speed.
+        const originalModelIndex = currentModelIndex;
+        // Find the index for flash model
+        const flashModelIndex = AVAILABLE_MODELS.findIndex(m => m.includes('flash'));
+        if (flashModelIndex !== -1) {
+            currentModelIndex = flashModelIndex;
+            console.log("Temporarily switching to flash model for spinner generation.");
+        }
+
+        const prompt = spinnerPrompts.generateSceneOptions;
+        const jsonString = await callGeminiApiWithRetry(prompt, "application/json");
+
+        // Switch back to the original model
+        currentModelIndex = originalModelIndex;
+        console.log("Switched back to original model.");
+
+        const items = JSON.parse(jsonString);
+
+        // Basic validation
+        if (!items.locations || !items.vibes || !items.wildcards || items.locations.length === 0) {
+            throw new Error("LLM response for spinner items is missing required keys or is empty.");
+        }
+        console.log("Successfully received spinner items from LLM:", items);
+        return items;
+
+    } catch (error) {
+        console.error("Error getting spinner items from LLM:", error);
+        showError("Could not generate scene options. Using fallback.");
+        // Fallback to hardcoded features if LLM fails
+        return {
+            locations: sceneFeatures.locations,
+            vibes: sceneFeatures.vibes,
+            wildcards: ["A sudden rainstorm", "A forgotten song plays", "A shared secret", "A mysterious stranger watches", "A power outage", "A strange phone call", "An old photograph is found", "A case of mistaken identity"]
+        };
+    }
+}
 
 /** Initializes the AudioContext if it doesn't exist. */
 function initAudioContext() {
@@ -1969,24 +2011,28 @@ function handleRoomDataReceived(senderId, data) {
             showNotification(`Your date with ${senderId.slice(-4)} was declined.`, "warn");
             break;
 
-        case 'scene_selection_submission':
-            console.log(`Received scene selections from ${senderId.slice(-6)}`);
-            if (isDateActive) {
-                sceneSelections.set(senderId, data.payload);
-                checkForSceneSelectionCompletion();
+        case 'spinner_items':
+            if (!amIPlayer1) {
+                console.log("Received spinner items from Player 1:", data.payload);
+                setupSpinnersUI(data.payload);
             }
             break;
-
         case 'spinner_state_update':
-            if (isSpinnerRunning && !amIPlayer1) {
-                const { angle } = data.payload;
-                spinnerAngle = angle;
+            if (!amIPlayer1) {
+                const { category, angle, isRunning, result } = data.payload;
+                if (spinners[category]) {
+                    spinners[category].angle = angle;
+                    spinners[category].isRunning = isRunning;
+                    if (result) {
+                        spinners[category].result = result;
+                    }
+                }
             }
             break;
-        case 'spinner_result':
-            if (isSpinnerRunning && !amIPlayer1) {
-                const { result, finalAngle } = data.payload;
-                endSpinner(result, finalAngle);
+        case 'spinner_final_results':
+            if (!amIPlayer1) {
+                console.log("Received final spinner results:", data.payload);
+                endAllSpinners(data.payload);
             }
             break;
 
@@ -2403,70 +2449,88 @@ function startNewDate(partnerId, iAmPlayer1) {
     startSceneSelection();
 }
 
-function startSceneSelection() {
-    console.log("Starting scene selection...");
-    uiContainer.innerHTML = `<div class="text-center p-8"><h2>Let's set the scene...</h2><p>Choose some elements for your first date. Your choices will be combined with your partner's to create the setting.</p></div>`;
+async function startSceneSelection() {
+    console.log("Starting new scene selection with 3-spinner UI...");
 
-    const selectionUI = [];
-    const locationOptions = sceneFeatures.locations.sort(() => 0.5 - Math.random()).slice(0, 4);
-    const vibeOptions = sceneFeatures.vibes.sort(() => 0.5 - Math.random()).slice(0, 4);
+    // Hide game wrapper, show spinner modal
+    if(gameWrapper) gameWrapper.style.display = 'none';
+    if(spinnerModal) spinnerModal.style.display = 'flex';
+    if(spinnerTitle) spinnerTitle.textContent = "Let's Set the Scene...";
+    if(spinnerResult) spinnerResult.style.display = 'none';
 
-    locationOptions.forEach(loc => {
-        selectionUI.push({ type: 'checkbox', name: `loc_${loc.replace(/\s+/g, '_')}`, label: loc, value: false, color: '#FFFFFF' });
-    });
-    vibeOptions.forEach(vibe => {
-        selectionUI.push({ type: 'checkbox', name: `vibe_${vibe.replace(/\s+/g, '_')}`, label: vibe, value: false, color: '#FFFFFF' });
-    });
+    const spinnersContainer = document.getElementById('spinners-container');
+    const legendContainer = document.getElementById('spinner-legend');
+    const spinAllButton = document.getElementById('spin-all-button');
 
-    renderUI(selectionUI);
-
-    const submitSelectionsButton = document.createElement('button');
-    submitSelectionsButton.id = 'submit-scene-selections';
-    submitSelectionsButton.className = 'geems-button mt-4';
-    submitSelectionsButton.textContent = 'Submit Selections';
-    uiContainer.appendChild(submitSelectionsButton);
-
-    submitSelectionsButton.onclick = () => {
-        const selections = {};
-        uiContainer.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-            if (checkbox.checked) {
-                selections[checkbox.name] = checkbox.labels[0].textContent;
-            }
-        });
-
-        console.log("My scene selections:", selections);
-        MPLib.broadcastToRoom({ type: 'scene_selection_submission', payload: selections });
-
-        const myRoomId = MPLib.getLocalRoomId();
-        sceneSelections.set(myRoomId, selections);
-
-        uiContainer.innerHTML = `<div class="text-center p-8"><h2>Selections submitted.</h2><p>Waiting for your partner...</p></div>`;
-        checkForSceneSelectionCompletion();
-    };
-}
-
-function checkForSceneSelectionCompletion() {
-    if (sceneSelections.size < 2) {
+    if (!spinnersContainer || !legendContainer || !spinAllButton) {
+        showError("Spinner UI elements not found in index.html.");
         return;
     }
-    console.log("Both players have submitted scene selections.");
 
-    const allSelections = [];
-    for (const selections of sceneSelections.values()) {
-        for (const key in selections) {
-            allSelections.push(selections[key]);
-        }
+    spinnersContainer.innerHTML = '<div><p class="text-center">Conjuring some possibilities...</p></div>';
+    legendContainer.innerHTML = '';
+    spinAllButton.disabled = true;
+
+    let spinnerItems;
+    if (amIPlayer1) {
+        spinnerItems = await getSpinnerItemsFromLLM();
+        // Broadcast items to partner
+        MPLib.broadcastToRoom({ type: 'spinner_items', payload: spinnerItems });
+        setupSpinnersUI(spinnerItems);
+    } else {
+        // Player 2 waits for items from Player 1
+        console.log("Player 2 waiting for spinner items from Player 1...");
+        spinnersContainer.innerHTML = '<div><p class="text-center">Waiting for your partner to generate the scene options...</p></div>';
     }
-
-    const uniqueSelections = [...new Set(allSelections)];
-    console.log("Combined unique selections for spinner:", uniqueSelections);
-
-    startSpinner(uniqueSelections, (winningScene) => {
-        if (amIPlayer1) {
-            fetchFirstTurn(null, winningScene); // No minigame winner for this flow
-        }
-    });
 }
+
+function setupSpinnersUI(items) {
+    const spinnersContainer = document.getElementById('spinners-container');
+    const legendContainer = document.getElementById('spinner-legend');
+    const spinAllButton = document.getElementById('spin-all-button');
+
+    if (!spinnersContainer || !legendContainer || !spinAllButton) return;
+
+    spinnersContainer.innerHTML = '';
+    legendContainer.innerHTML = ''; // Clear legend initially
+
+    const categories = Object.keys(items);
+
+    categories.forEach(category => {
+        // Create the spinner instance HTML
+        const spinnerInstance = document.createElement('div');
+        spinnerInstance.className = 'spinner-instance';
+
+        const title = document.createElement('h3');
+        title.className = 'spinner-category-title';
+        title.textContent = category.charAt(0).toUpperCase() + category.slice(1);
+
+        const container = document.createElement('div');
+        container.className = 'spinner-container';
+
+        const pointer = document.createElement('div');
+        pointer.className = 'spinner-pointer';
+
+        const wheel = document.createElement('div');
+        wheel.id = `spinner-wheel-${category}`;
+        wheel.className = 'spinner-wheel';
+
+        container.appendChild(pointer);
+        container.appendChild(wheel);
+        spinnerInstance.appendChild(title);
+        spinnerInstance.appendChild(container);
+        spinnersContainer.appendChild(spinnerInstance);
+
+        // Populate the spinner
+        spinners[category].items = items[category];
+        spinners[category].wheelElement = wheel;
+        populateSpinner(wheel, items[category], category);
+    });
+
+    spinAllButton.disabled = false;
+    spinAllButton.onclick = startAllSpinners;
+}
+
 
 async function fetchFirstTurn(minigameWinner, scene) {
     console.log(`Fetching first turn. Minigame winner: ${minigameWinner}, Scene: ${scene}`);
@@ -2747,15 +2811,34 @@ window.hideInterstitial = function() {
 
 // --- Spinner Mini-Game Functions ---
 
-function populateSpinner(wheelElement, items) {
+const SPINNER_COLORS = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+const SPINNER_SYMBOLS = ["★", "♥", "♦", "♣", "♠", "•", "►", "◄"];
+
+function populateSpinner(wheelElement, items, category) {
     if (!wheelElement) return;
     wheelElement.innerHTML = '';
+    const legendContainer = document.getElementById('spinner-legend');
 
     const numSegments = items.length;
     if (numSegments === 0) return;
     const anglePerSegment = 360 / numSegments;
 
-    const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+    // Populate legend
+    if (legendContainer && category === 'locations') { // Only populate legend once
+        const legendHeader = document.createElement('p');
+        legendHeader.innerHTML = 'Symbols correspond to the <strong>Locations</strong> wheel.';
+        legendHeader.style.textAlign = 'center';
+        legendHeader.style.fontStyle = 'italic';
+        legendHeader.style.marginBottom = '1rem';
+        legendContainer.appendChild(legendHeader);
+
+        items.forEach((item, index) => {
+            const legendItem = document.createElement('div');
+            legendItem.className = 'legend-item';
+            legendItem.innerHTML = `<span class="legend-symbol" style="color: ${SPINNER_COLORS[index % SPINNER_COLORS.length]};">${SPINNER_SYMBOLS[index % SPINNER_SYMBOLS.length]}</span> <span class="legend-text">${item}</span>`;
+            legendContainer.appendChild(legendItem);
+        });
+    }
 
     items.forEach((item, index) => {
         const segment = document.createElement('div');
@@ -2763,9 +2846,11 @@ function populateSpinner(wheelElement, items) {
 
         const content = document.createElement('div');
         content.className = 'segment-content';
-        content.textContent = item;
+        const symbol = SPINNER_SYMBOLS[index % SPINNER_SYMBOLS.length];
+        content.textContent = symbol; // Only show symbol on the wheel
 
-        segment.style.backgroundColor = colors[index % colors.length];
+        const color = SPINNER_COLORS[index % SPINNER_COLORS.length];
+        segment.style.backgroundColor = color;
 
         const rotation = index * anglePerSegment;
         segment.style.transform = `rotate(${rotation}deg)`;
@@ -2780,105 +2865,121 @@ function populateSpinner(wheelElement, items) {
     });
 }
 
-function startSpinner(items, onComplete) {
-    console.log(`Starting scene spinner...`);
-    isSpinnerRunning = true;
-    spinnerCompletionCallback = onComplete;
+function startAllSpinners() {
+    if (isSpinning) return;
+    console.log(`Starting all spinners...`);
+    isSpinning = true;
 
-    spinnerAngle = 0;
-
-    if (spinnerModal) {
-        spinnerTitle.textContent = 'Spinning for the Scene!';
-        spinnerModal.style.display = 'flex';
-    }
-    if (spinnerWheel) spinnerWheel.style.transition = 'none';
-    if (spinnerResult) spinnerResult.style.display = 'none';
-
-    populateSpinner(spinnerWheel, items);
+    const spinAllButton = document.getElementById('spin-all-button');
+    if (spinAllButton) spinAllButton.disabled = true;
 
     if (amIPlayer1) {
-        spinnerVelocity = 5 + Math.random() * 5;
-        lastSpinnerFrameTime = performance.now();
-        requestAnimationFrame(runSpinnerAnimation);
+        for (const category in spinners) {
+            spinners[category].velocity = 5 + Math.random() * 5;
+            spinners[category].isRunning = true;
+        }
     } else {
-        lastSpinnerFrameTime = performance.now();
-        requestAnimationFrame(runSpinnerAnimation);
+        for (const category in spinners) {
+            spinners[category].isRunning = true;
+        }
     }
+
+    lastSpinnerFrameTime = performance.now();
+    requestAnimationFrame(runAllSpinnersAnimation);
 }
 
-function runSpinnerAnimation(currentTime) {
-    if (!isSpinnerRunning) return;
-
-    if (lastSpinnerFrameTime === 0) {
-        lastSpinnerFrameTime = currentTime;
-        requestAnimationFrame(runSpinnerAnimation);
-        return;
-    }
+function runAllSpinnersAnimation(currentTime) {
+    if (!isSpinning) return;
 
     const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
     lastSpinnerFrameTime = currentTime;
 
-    if (amIPlayer1) {
-        if (spinnerVelocity !== 0) {
-            spinnerVelocity *= Math.pow(FRICTION, deltaTime * 60);
+    let stillSpinningCount = 0;
+
+    for (const category in spinners) {
+        if (!spinners[category].isRunning) continue;
+
+        if (amIPlayer1) {
+            spinners[category].velocity *= Math.pow(FRICTION, deltaTime * 60);
+            spinners[category].angle += spinners[category].velocity * deltaTime;
+
+            if (Math.abs(spinners[category].velocity) < MIN_SPINNER_VELOCITY) {
+                spinners[category].velocity = 0;
+                spinners[category].isRunning = false;
+
+                const numSegments = spinners[category].items.length;
+                const anglePerSegment = 360 / numSegments;
+                const finalAngleDegrees = (spinners[category].angle * 180 / Math.PI);
+                const pointerAngle = 270;
+                const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
+                const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
+                spinners[category].result = spinners[category].items[winningSegmentIndex];
+                console.log(`Spinner ${category} stopped. Result: ${spinners[category].result}`);
+            } else {
+                stillSpinningCount++;
+            }
+
+            MPLib.broadcastToRoom({
+                type: 'spinner_state_update',
+                payload: {
+                    category: category,
+                    angle: spinners[category].angle,
+                    isRunning: spinners[category].isRunning,
+                    result: spinners[category].result
+                }
+            });
+        } else {
+            if (spinners[category].isRunning) {
+                stillSpinningCount++;
+            }
         }
-        spinnerAngle += spinnerVelocity * deltaTime;
 
-        if (Math.abs(spinnerVelocity) < MIN_SPINNER_VELOCITY) {
-            spinnerVelocity = 0;
-            isSpinnerRunning = false;
-
-            const items = [...sceneSelections.values()].flatMap(sel => Object.values(sel));
-            const uniqueItems = [...new Set(items)];
-            const numSegments = uniqueItems.length;
-            const anglePerSegment = 360 / numSegments;
-            const finalAngleDegrees = (spinnerAngle * 180 / Math.PI);
-            const pointerAngle = 270;
-            const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
-            const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
-            const result = uniqueItems[winningSegmentIndex];
-
-            console.log(`Spinner stopped. Result: ${result}`);
-
-            const resultPayload = { result: result, finalAngle: spinnerAngle };
-            MPLib.broadcastToRoom({ type: 'spinner_result', payload: resultPayload });
-            endSpinner(result, spinnerAngle);
-            return;
+        if (spinners[category].wheelElement) {
+            spinners[category].wheelElement.style.transform = `rotate(${spinners[category].angle}rad)`;
         }
-
-        MPLib.broadcastToRoom({
-            type: 'spinner_state_update',
-            payload: { angle: spinnerAngle }
-        });
     }
 
-    if (spinnerWheel) {
-        spinnerWheel.style.transform = `rotate(${spinnerAngle}rad)`;
+    if (stillSpinningCount === 0 && amIPlayer1) {
+        isSpinning = false;
+        const finalResults = {
+            locations: spinners.locations.result,
+            vibes: spinners.vibes.result,
+            wildcards: spinners.wildcards.result,
+        };
+        console.log("All spinners stopped. Final results:", finalResults);
+        MPLib.broadcastToRoom({ type: 'spinner_final_results', payload: finalResults });
+        endAllSpinners(finalResults);
+    } else {
+        requestAnimationFrame(runAllSpinnersAnimation);
     }
-
-    requestAnimationFrame(runSpinnerAnimation);
 }
 
-function endSpinner(result, finalAngle) {
-    isSpinnerRunning = false;
-    lastSpinnerFrameTime = 0;
+function endAllSpinners(results) {
+    isSpinning = false;
 
-    if (spinnerWheel) {
-        spinnerWheel.style.transition = 'transform 2s ease-out';
-        spinnerWheel.style.transform = `rotate(${finalAngle}rad)`;
+    for (const category in spinners) {
+        if (spinners[category].wheelElement) {
+            spinners[category].wheelElement.style.transition = 'transform 2s ease-out';
+            spinners[category].wheelElement.style.transform = `rotate(${spinners[category].angle}rad)`;
+        }
     }
 
     if (spinnerResult) {
-        spinnerResult.textContent = `Scene: ${result}!`;
+        spinnerResult.innerHTML = `
+            <p><strong>Location:</strong> ${results.locations}</p>
+            <p><strong>Vibe:</strong> ${results.vibes}</p>
+            <p><strong>Wildcard:</strong> ${results.wildcards}</p>
+        `;
         spinnerResult.style.display = 'block';
     }
 
     setTimeout(() => {
         if (spinnerModal) spinnerModal.style.display = 'none';
-        if (spinnerCompletionCallback) {
-            spinnerCompletionCallback(result);
+        if (amIPlayer1) {
+            const combinedScene = `${results.locations}, with a ${results.vibes} vibe, and then: ${results.wildcards}`;
+            fetchFirstTurn(null, combinedScene);
         }
-    }, 4000);
+    }, 5000);
 }
 
 // Ensure DOM is fully loaded before initializing

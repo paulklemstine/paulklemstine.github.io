@@ -128,3 +128,29 @@ export const sceneFeatures = {
     locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
     vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
 };
+
+// Prompts for the scene spinner
+export const spinnerPrompts = {
+    // This prompt asks the LLM to generate categories and items for the scene selection spinners.
+    generateSceneOptions: `
+// YOUR DIRECTIVE: You are a creative engine for a romantic storytelling game. Your task is to generate a JSON object containing three arrays of strings for three distinct categories of scene-setting options.
+//
+// ### CATEGORIES ###
+// 1. "locations": Generate 8 unique and evocative locations for a blind date. Examples: "A dusty antique shop", "A rooftop garden at sunset", "A midnight train to nowhere".
+// 2. "vibes": Generate 8 unique and interesting vibes or moods for the scene. Examples: "Cozy and intimate", "Awkward but charming", "High-energy and chaotic", "Surreal and dreamlike".
+// 3. "wildcards": Generate 8 unique and unexpected 'wildcard' elements that could be introduced into the scene. These should be surprising and inspire creative storytelling. Examples: "A sudden power outage", "A mysterious letter arrives", "A shared, forgotten memory", "A cat that seems to be following them".
+//
+// ### OUTPUT FORMAT ###
+// - Your entire output MUST be a single, valid, compact JSON object.
+// - Do NOT wrap it in markdown, comments, or any other text.
+// - The JSON object must have three keys: "locations", "vibes", and "wildcards".
+// - Each key must correspond to an array of 8 strings.
+//
+// Example Output:
+// {
+//   "locations": ["A neon-lit arcade", "A foggy pier", "A secret jazz club", "A botanical garden's corpse flower exhibit", "An all-night diner", "A traveling carnival", "The last video rental store", "A museum of strange technology"],
+//   "vibes": ["Nostalgic and bittersweet", "Candid and confessional", "Flirty and competitive", "Deeply philosophical", "Suspenseful and tense", "Lighthearted and silly", "Opulent and decadent", "Quietly observant"],
+//   "wildcards": ["A case of mistaken identity", "A song they both know plays", "They are the only two people there", "A challenge is issued", "An old photograph is found", "The lights flicker and go out", "A secret is accidentally revealed", "They realize they've met before"]
+// }
+`
+};

@@ -738,11 +738,72 @@ body {
 }
 
 /* --- Spinner Modal --- */
+.spinner-main-container {
+    display: flex;
+    flex-direction: row;
+    gap: 2rem;
+    align-items: flex-start;
+}
+
+.spinners-container {
+    display: flex;
+    flex-direction: row;
+    gap: 1.5rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    flex-grow: 1;
+}
+
+.spinner-instance {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.spinner-category-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.5rem;
+    color: #4c4c4c;
+    margin-bottom: 0.5rem;
+}
+
+.spinner-legend-container {
+    flex-basis: 300px;
+    flex-shrink: 0;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+
+.spinner-legend {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.legend-symbol {
+    font-size: 1.5rem;
+    width: 2rem;
+    text-align: center;
+}
+
+.legend-text {
+    color: #495057;
+}
+
 .spinner-container {
     position: relative;
-    width: 300px;
-    height: 300px;
-    margin: 2rem auto;
+    width: 250px;
+    height: 250px;
+    margin: 0 auto;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -765,7 +826,7 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    clip-path: polygon(50% 50%, 100% 0, 100% 35%); /* Creates a wedge shape */
+    clip-path: polygon(50% 50%, 100% 0, 100% 35%); /* Creates a wedge shape for 8 segments */
     transform-origin: 50% 50%;
     display: flex;
     justify-content: center;
@@ -773,12 +834,12 @@ body {
 }
 
 .segment-content {
-    color: rgba(0,0,0,0.6);
+    color: #000;
     font-weight: bold;
-    font-size: 1rem;
-    text-shadow: 1px 1px 1px rgba(255,255,255,0.3);
-    transform: rotate(15deg) translate(0, -50%);
-    padding-top: 1.5rem;
+    font-size: 1.5rem;
+    text-shadow: none;
+    transform: rotate(22.5deg) translate(0, -50%);
+    padding-top: 1rem;
     text-align: center;
     position: absolute;
     top: 50%;
