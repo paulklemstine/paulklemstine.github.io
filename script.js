@@ -2560,6 +2560,23 @@ function checkForSceneSelectionCompletion() {
     const finalVibeItems = [...new Set(combinedSelections.vibe)];
     const finalWildcardItems = [...new Set(combinedSelections.wildcard)];
 
+    // --- BUG FIX: Ensure no spinner is empty ---
+    if (finalLocationItems.length === 0) {
+        const randomLocation = sceneFeatures.locations[Math.floor(Math.random() * sceneFeatures.locations.length)];
+        finalLocationItems.push(randomLocation);
+        console.log("No location selected, adding a random one:", randomLocation);
+    }
+    if (finalVibeItems.length === 0) {
+        const randomVibe = sceneFeatures.vibes[Math.floor(Math.random() * sceneFeatures.vibes.length)];
+        finalVibeItems.push(randomVibe);
+        console.log("No vibe selected, adding a random one:", randomVibe);
+    }
+    if (finalWildcardItems.length === 0) {
+        const randomWildcard = sceneFeatures.wildcards[Math.floor(Math.random() * sceneFeatures.wildcards.length)];
+        finalWildcardItems.push(randomWildcard);
+        console.log("No wildcard selected, adding a random one:", randomWildcard);
+    }
+
     console.log("Final items for spinners:", {
         locations: finalLocationItems,
         vibes: finalVibeItems,
@@ -2960,7 +2977,7 @@ function startSpinner(spinnersData, onComplete) {
 
         if (amIPlayer1) {
             spinnerState.isSpinning = true;
-            spinnerState.velocity = 5 + Math.random() * 5; // Radians per second
+            spinnerState.velocity = 15 + Math.random() * 10; // Increased speed
         }
     });
 
