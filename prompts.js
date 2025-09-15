@@ -131,22 +131,41 @@ export const sceneFeatures = {
 };
 
 /**
- * Uses a quick flash LLM call to generate a few extra, creative wildcard options for the scene setup.
+ * Uses a quick flash LLM call to generate dynamic scene-setting options.
+ * @param {boolean} isExplicit - Whether to generate SFW or NSFW options.
  * @param {Function} llmApiCall - The function to call the Gemini API.
- * @returns {Promise<string[]>} A promise that resolves to an array of new wildcard strings.
+ * @returns {Promise<{locations: string[], vibes: string[], wildcards: string[]}>} A promise that resolves to an object containing arrays of options.
  */
-export async function getDynamicWildcards(llmApiCall) {
-    const prompt = `You are a creative writing assistant. Brainstorm 4 brief, unexpected, and evocative events or elements that could happen on a first date. They should be 2-5 words each. Return ONLY a JSON array of strings. For example: ["a shared dream", "a forgotten song plays", "a blackout", "a mysterious stranger appears"]`;
+export async function getDynamicSceneOptions(isExplicit, llmApiCall) {
+    const theme = isExplicit
+        ? "sexy, risque, and adult-themed"
+        : "creative, interesting, and evocative";
+
+    const prompt = `You are a creative writing assistant. Brainstorm options for a first date scenario. The theme is: ${theme}.
+Generate 5 options for each of the following categories: 'locations', 'vibes', and 'wildcards'.
+The options should be brief (2-5 words).
+Return ONLY a single, valid JSON object with three keys: "locations", "vibes", and "wildcards". Each key should have an array of 5 strings as its value.
+Example for a non-explicit theme:
+{
+  "locations": ["an abandoned observatory", "a rooftop garden at night", "a secret jazz club", "a vintage train car", "a foggy pier"],
+  "vibes": ["nostalgic", "surreal", "electrifying", "intimate", "suspenseful"],
+  "wildcards": ["a shared memory is triggered", "a mysterious benefactor pays the bill", "the music changes perfectly", "a strange coincidence is revealed", "a blackout"]
+}`;
+
     try {
         const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
-        const wildcards = JSON.parse(responseJson);
-        if (Array.isArray(wildcards) && wildcards.every(item => typeof item === 'string')) {
-            return wildcards;
+        const options = JSON.parse(responseJson);
+        // Basic validation to ensure the response is in the correct format
+        if (options && Array.isArray(options.locations) && Array.isArray(options.vibes) && Array.isArray(options.wildcards)) {
+            console.log("Successfully fetched dynamic scene options:", options);
+            return options;
         }
-        console.warn("Dynamic wildcards response was not a valid string array:", wildcards);
-        return [];
+        console.warn("Dynamic scene options response was not in the expected format:", options);
+        // Fallback to static features if validation fails
+        return sceneFeatures;
     } catch (error) {
-        console.error("Failed to get dynamic wildcards from LLM:", error);
-        return []; // Return an empty array on error to not break the game
+        console.error("Failed to get dynamic scene options from LLM:", error);
+        // Fallback to static features on error
+        return sceneFeatures;
     }
 }

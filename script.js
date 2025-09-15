@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, sceneFeatures, getDynamicWildcards} from './prompts.js';
+import {geemsPrompts, sceneFeatures, getDynamicSceneOptions} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -2423,13 +2423,13 @@ function showProposalModal() {
 window.showProposalModal = showProposalModal; // Expose for testing
 
 /** Transitions from lobby to game view and initializes date state */
-function startNewDate(partnerId, iAmPlayer1) {
+async function startNewDate(partnerId, iAmPlayer1) {
     console.log(`Starting new date with ${partnerId}. Am I Player 1? ${iAmPlayer1}`);
 
     isDateActive = true;
     currentPartnerId = partnerId;
     amIPlayer1 = iAmPlayer1;
-    turnSubmissions.clear(); // Ensure clean state for the new date
+    turnSubmissions.clear();
     sceneSelections.clear();
 
     // Hide lobby, show game
@@ -2438,63 +2438,39 @@ function startNewDate(partnerId, iAmPlayer1) {
     if(lobbyContainer) lobbyContainer.style.display = 'none';
     if(gameWrapper) gameWrapper.style.display = 'block';
 
-    startSceneSelection();
+    // Pre-fetch all dynamic scene options based on the 18+ mode setting
+    const dynamicOptions = await getDynamicSceneOptions(isDateExplicit, callGeminiApiWithRetry);
+
+    startSceneSelection(dynamicOptions);
 }
 
-async function startSceneSelection() {
+function startSceneSelection(options) {
     console.log("Starting scene selection with 3 categories...");
     uiContainer.innerHTML = `<div class="text-center p-8"><h2>Let's set the scene...</h2><p>Choose some elements for your first date. Your choices will be combined with your partner's to create the setting.</p></div>`;
 
     const selectionGrid = document.createElement('div');
-    selectionGrid.className = 'scene-selection-grid'; // A new class for styling the grid
+    selectionGrid.className = 'scene-selection-grid';
+
+    // Use dynamic options, but fall back to static if they are missing
+    const locations = options?.locations || sceneFeatures.locations;
+    const vibes = options?.vibes || sceneFeatures.vibes;
+    const wildcards = options?.wildcards || sceneFeatures.wildcards;
 
     // Create columns for each category
     const locationColumn = document.createElement('div');
-    const vibeColumn = document.createElement('div');
-    const wildcardColumn = document.createElement('div');
-
     locationColumn.innerHTML = '<h3>Locations</h3>';
+    locations.slice(0, 5).forEach(loc => locationColumn.appendChild(createSelectionCheckbox('location', loc)));
+
+    const vibeColumn = document.createElement('div');
     vibeColumn.innerHTML = '<h3>Vibes</h3>';
+    vibes.slice(0, 5).forEach(vibe => vibeColumn.appendChild(createSelectionCheckbox('vibe', vibe)));
+
+    const wildcardColumn = document.createElement('div');
     wildcardColumn.innerHTML = '<h3>Wildcards</h3>';
-
-    // Populate Locations
-    const locationOptions = [...sceneFeatures.locations].sort(() => 0.5 - Math.random()).slice(0, 5);
-    locationOptions.forEach(loc => {
-        const checkbox = createSelectionCheckbox('location', loc);
-        locationColumn.appendChild(checkbox);
-    });
-
-    // Populate Vibes
-    const vibeOptions = [...sceneFeatures.vibes].sort(() => 0.5 - Math.random()).slice(0, 5);
-    vibeOptions.forEach(vibe => {
-        const checkbox = createSelectionCheckbox('vibe', vibe);
-        vibeColumn.appendChild(checkbox);
-    });
-
-    // Populate Wildcards (Static + Dynamic)
-    const staticWildcards = [...sceneFeatures.wildcards].sort(() => 0.5 - Math.random()).slice(0, 3);
-    staticWildcards.forEach(wc => {
-        const checkbox = createSelectionCheckbox('wildcard', wc);
-        wildcardColumn.appendChild(checkbox);
-    });
-
-    // Add a placeholder while dynamic wildcards load
-    const dynamicLoadingPlaceholder = document.createElement('div');
-    dynamicLoadingPlaceholder.className = 'geems-checkbox-option disabled';
-    dynamicLoadingPlaceholder.textContent = 'Generating ideas...';
-    wildcardColumn.appendChild(dynamicLoadingPlaceholder);
+    wildcards.slice(0, 5).forEach(wc => wildcardColumn.appendChild(createSelectionCheckbox('wildcard', wc)));
 
     selectionGrid.append(locationColumn, vibeColumn, wildcardColumn);
     uiContainer.appendChild(selectionGrid);
-
-    // Fetch and populate dynamic wildcards
-    getDynamicWildcards(callGeminiApiWithRetry).then(dynamicWildcards => {
-        dynamicLoadingPlaceholder.remove(); // Remove placeholder
-        dynamicWildcards.slice(0, 2).forEach(wc => { // Take up to 2 dynamic ones
-            const checkbox = createSelectionCheckbox('wildcard', wc);
-            wildcardColumn.appendChild(checkbox);
-        });
-    });
 
     const submitSelectionsButton = document.createElement('button');
     submitSelectionsButton.id = 'submit-scene-selections';
@@ -2546,49 +2522,52 @@ function checkForSceneSelectionCompletion() {
     console.log("Both players have submitted scene selections.");
 
     // Aggregate selections from both players for each category
-    const combinedSelections = { location: [], vibe: [], wildcard: [] };
+    const allSelections = { location: [], vibe: [], wildcard: [] };
     for (const selections of sceneSelections.values()) {
         for (const category in selections) {
-            if (combinedSelections[category]) {
-                combinedSelections[category].push(...selections[category]);
+            if (allSelections[category]) {
+                allSelections[category].push(...selections[category]);
             }
         }
     }
 
-    // Get unique items for each category
-    const finalLocationItems = [...new Set(combinedSelections.location)];
-    const finalVibeItems = [...new Set(combinedSelections.vibe)];
-    const finalWildcardItems = [...new Set(combinedSelections.wildcard)];
+    const processCategory = (categoryKey) => {
+        const counts = {};
+        const sourceArray = allSelections[categoryKey];
+        sourceArray.forEach(item => {
+            counts[item] = (counts[item] || 0) + 1;
+        });
 
-    // --- BUG FIX: Ensure no spinner is empty ---
-    if (finalLocationItems.length === 0) {
-        const randomLocation = sceneFeatures.locations[Math.floor(Math.random() * sceneFeatures.locations.length)];
-        finalLocationItems.push(randomLocation);
-        console.log("No location selected, adding a random one:", randomLocation);
-    }
-    if (finalVibeItems.length === 0) {
-        const randomVibe = sceneFeatures.vibes[Math.floor(Math.random() * sceneFeatures.vibes.length)];
-        finalVibeItems.push(randomVibe);
-        console.log("No vibe selected, adding a random one:", randomVibe);
-    }
-    if (finalWildcardItems.length === 0) {
-        const randomWildcard = sceneFeatures.wildcards[Math.floor(Math.random() * sceneFeatures.wildcards.length)];
-        finalWildcardItems.push(randomWildcard);
-        console.log("No wildcard selected, adding a random one:", randomWildcard);
-    }
+        let weightedItems = Object.entries(counts).map(([text, count]) => ({
+            text: text,
+            weight: count // count will be 1 for single selection, 2 for agreement
+        }));
 
-    console.log("Final items for spinners:", {
-        locations: finalLocationItems,
-        vibes: finalVibeItems,
-        wildcards: finalWildcardItems
+        if (weightedItems.length === 0) {
+            const defaultArray = sceneFeatures[categoryKey + 's'] || sceneFeatures[categoryKey];
+            const randomItem = defaultArray[Math.floor(Math.random() * defaultArray.length)];
+            weightedItems.push({ text: randomItem, weight: 1 });
+            console.log(`No ${categoryKey} selected, adding a random one:`, randomItem);
+        }
+        return weightedItems;
+    };
+
+    const locationItems = processCategory('location');
+    const vibeItems = processCategory('vibe');
+    const wildcardItems = processCategory('wildcard');
+
+    console.log("Final weighted items for spinners:", {
+        locations: locationItems,
+        vibes: vibeItems,
+        wildcards: wildcardItems
     });
 
-    // Pass the arrays of items to the new startSpinner function
+    // Pass the arrays of weighted items to the new startSpinner function
     startSpinner(
         [
-            { title: 'Location', items: finalLocationItems },
-            { title: 'Vibe', items: finalVibeItems },
-            { title: 'Wildcard', items: finalWildcardItems }
+            { title: 'Location', items: locationItems },
+            { title: 'Vibe', items: vibeItems },
+            { title: 'Wildcard', items: wildcardItems }
         ],
         (winningResults) => {
             if (amIPlayer1) {
@@ -2884,47 +2863,116 @@ let activeSpinners = [];
 
 function populateSpinner(wheelElement, legendElement, spinnerData) {
     if (!wheelElement || !legendElement) return;
-    wheelElement.innerHTML = '';
+    wheelElement.innerHTML = ''; // Clear previous segments and symbols
     legendElement.innerHTML = `<h4>${spinnerData.title}</h4>`;
 
-    const { items } = spinnerData;
-    const numSegments = items.length;
-    if (numSegments === 0) {
+    const { items } = spinnerData; // Items are now { text: string, weight: number }
+    if (items.length === 0) {
         wheelElement.textContent = "No items";
         return;
     }
 
-    const anglePerSegment = 360 / numSegments;
+    const totalWeight = items.reduce((sum, item) => sum + item.weight, 0);
+    if (totalWeight === 0) return;
+
     const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
     const symbols = ["❤️", "⭐", "💎", "🍀", "💧", "🌙", "💜", "✨"];
 
+    let cumulativePercent = 0;
+    const gradientParts = [];
+
     items.forEach((item, index) => {
-        const segment = document.createElement('div');
-        segment.className = 'spinner-segment';
-        const content = document.createElement('div');
-        content.className = 'segment-content';
-
+        const percent = (item.weight / totalWeight) * 100;
         const color = colors[index % colors.length];
+
+        gradientParts.push(`${color} ${cumulativePercent}% ${cumulativePercent + percent}%`);
+
+        // --- Place Symbol ---
         const symbol = symbols[index % symbols.length];
+        const symbolDiv = document.createElement('div');
+        symbolDiv.className = 'segment-content'; // Re-use styling
+        symbolDiv.textContent = symbol;
 
-        segment.style.backgroundColor = color;
-        content.textContent = symbol;
-        spinnerData.segmentSymbols[index] = symbol; // Store the symbol
+        const midpointPercent = cumulativePercent + percent / 2;
+        // Calculate angle, subtracting 90 degrees (PI/2 radians) to make 0 degrees point upwards
+        const midpointAngleRad = (midpointPercent / 100) * 2 * Math.PI - (Math.PI / 2);
 
-        const rotation = index * anglePerSegment;
-        segment.style.transform = `rotate(${rotation}deg)`;
-        const contentRotation = anglePerSegment / 2;
-        content.style.transform = `rotate(${contentRotation}deg) translate(0, -50%)`;
+        const radius = wheelElement.offsetWidth / 2 * 0.6; // 60% of the way out
+        const x = (wheelElement.offsetWidth / 2) + radius * Math.cos(midpointAngleRad);
+        const y = (wheelElement.offsetHeight / 2) + radius * Math.sin(midpointAngleRad);
 
-        wheelElement.appendChild(segment);
-        segment.appendChild(content);
+        symbolDiv.style.left = `${x}px`;
+        symbolDiv.style.top = `${y}px`;
+        symbolDiv.style.transform = 'translate(-50%, -50%)'; // Center the symbol on the calculated point
 
-        // Add to legend
+        wheelElement.appendChild(symbolDiv);
+
+        // --- Add to legend ---
         const legendItem = document.createElement('div');
         legendItem.className = 'legend-item';
-        legendItem.innerHTML = `<span class="legend-symbol" style="color: ${color};">${symbol}</span> ${item}`;
+        const weightIndicator = item.weight > 1 ? ' (x2)' : '';
+        legendItem.innerHTML = `<span class="legend-symbol" style="color: ${color};">${symbol}</span> ${item.text}${weightIndicator}`;
         legendElement.appendChild(legendItem);
+
+        cumulativePercent += percent;
     });
+
+    wheelElement.style.background = `conic-gradient(${gradientParts.join(', ')})`;
+}
+
+function runSpinnerAnimation(currentTime) {
+    if (activeSpinners.every(s => !s.isSpinning)) {
+        if (amIPlayer1) endSpinner();
+        return;
+    }
+
+    const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
+    lastSpinnerFrameTime = currentTime;
+
+    activeSpinners.forEach(spinner => {
+        if (!spinner.isSpinning) return;
+
+        if (amIPlayer1) {
+            spinner.velocity *= Math.pow(FRICTION, deltaTime * 60);
+            if (Math.abs(spinner.velocity) < MIN_SPINNER_VELOCITY) {
+                spinner.velocity = 0;
+                spinner.isSpinning = false;
+                // Determine result now that it has stopped
+                const totalWeight = spinner.items.reduce((sum, item) => sum + item.weight, 0);
+                const finalAngleDegrees = (spinner.angle * 180 / Math.PI) % 360;
+                const pointerAngle = 270; // 12 o'clock
+                const normalizedAngle = (360 - finalAngleDegrees + pointerAngle) % 360;
+
+                const targetPoint = (normalizedAngle / 360) * totalWeight;
+                let cumulativeWeight = 0;
+                for (const item of spinner.items) {
+                    cumulativeWeight += item.weight;
+                    if (targetPoint <= cumulativeWeight) {
+                        spinner.result = item.text; // Set result to the text of the item
+                        break;
+                    }
+                }
+                console.log(`Spinner ${spinner.id} stopped. Result: ${spinner.result}`);
+
+            } else {
+                 spinner.angle += spinner.velocity * deltaTime;
+            }
+        }
+
+        spinner.wheelElement.style.transform = `rotate(${spinner.angle}rad)`;
+    });
+
+    if (amIPlayer1) {
+        const spinnerStates = activeSpinners.map(s => ({
+            id: s.id,
+            angle: s.angle,
+            isSpinning: s.isSpinning,
+            result: s.result
+        }));
+        MPLib.broadcastToRoom({ type: 'spinner_state_update', payload: { spinners: spinnerStates } });
+    }
+
+    requestAnimationFrame(runSpinnerAnimation);
 }
 
 function startSpinner(spinnersData, onComplete) {
@@ -3040,25 +3088,48 @@ function runSpinnerAnimation(currentTime) {
 
 function endSpinner() {
     isSpinnerRunning = false;
+    // Ensure we get the text from the result object, and filter out any null/undefined results
     const finalResults = activeSpinners.map(s => s.result).filter(Boolean);
 
     console.log("All spinners stopped. Final results:", finalResults);
 
     if (finalResults.length === activeSpinners.length) {
         if (spinnerResult) {
-            spinnerResult.innerHTML = `Your scene: <br><strong>${finalResults.join(' / ')}</strong>`;
             spinnerResult.style.display = 'block';
+            spinnerResult.innerHTML = '...'; // Initial state
+
+            // Reveal results one by one
+            setTimeout(() => {
+                spinnerResult.innerHTML = `Location: <strong>${finalResults[0]}</strong>`;
+            }, 500);
+
+            setTimeout(() => {
+                spinnerResult.innerHTML += `<br>Vibe: <strong>${finalResults[1]}</strong>`;
+            }, 1500);
+
+            setTimeout(() => {
+                spinnerResult.innerHTML += `<br>Wildcard: <strong>${finalResults[2]}</strong>`;
+            }, 2500);
         }
 
+        // Hide modal and fire callback after the full reveal
         setTimeout(() => {
             if (spinnerModal) spinnerModal.style.display = 'none';
             if (spinnerCompletionCallback) {
                 spinnerCompletionCallback(finalResults);
             }
             activeSpinners = [];
-        }, 4000);
+        }, 4500);
     } else {
         console.error("Mismatch in spinner results. Aborting.");
+        // Even if there's a mismatch, try to close the modal gracefully
+        setTimeout(() => {
+            if (spinnerModal) spinnerModal.style.display = 'none';
+            if (spinnerCompletionCallback) {
+                spinnerCompletionCallback([]); // Send empty array on error
+            }
+            activeSpinners = [];
+        }, 2000);
     }
 }
 
