@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, sceneFeatures, getDynamicSceneOptions, getMinigameActions} from './prompts.js';
+import {geemsPrompts, sceneFeatures, getDynamicSceneOptions, getMinigameActions, getMinigameRoundOutcome} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -1866,21 +1866,24 @@ async function startMinigame(onComplete) {
 
     // Player 1 is responsible for generating and distributing the game data
     if (amIPlayer1) {
+        minigameTitle.textContent = "Generating Actions...";
         try {
             const data = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
             if (data) {
                 minigameActionData = data;
                 MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
-                console.log("Minigame data generated and broadcasted.", minigameActionData);
-                 // Preload the next turn's data immediately
+                console.log("Minigame data generated and broadcasted.");
+                // Preload the next turn's data immediately
                 getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
                     preloadedMinigameData = preloadData;
-                    console.log("Preloaded minigame data for next round.");
+                    MPLib.broadcastToRoom({ type: 'minigame_preload_data', payload: preloadData });
+                    console.log("Preloaded minigame data for next round and sent to partner.");
                 });
+                minigameTitle.textContent = "Make a Move";
                 resetRoundUI(); // Now we can setup the UI
             } else {
-                showError("Could not generate minigame actions. Please try again.");
-                // Handle error - maybe close the minigame
+                showError("Could not generate minigame actions. Closing minigame.");
+                setTimeout(() => minigameModal.style.display = 'none', 3000);
             }
         } catch (error) {
             console.error("Error getting minigame actions:", error);
@@ -1888,12 +1891,11 @@ async function startMinigame(onComplete) {
         }
     } else {
         // Player 2 just waits for the data
-        roundResultDisplay.textContent = "Waiting for partner to generate minigame actions...";
+        minigameTitle.textContent = "Partner is Generating Actions...";
+        roundResultDisplay.textContent = "Waiting for partner to create the game...";
     }
 
     updateScoreboard();
-    // Note: resetRoundUI is now called by Player 1 after data is fetched,
-    // and by Player 2 when data is received.
 }
 
 function handlePlayerMove(move) {
@@ -1930,15 +1932,20 @@ function checkForRoundCompletion() {
         // --- End New UI Feedback Logic ---
 
         // Wait a moment before revealing the winner
-        setTimeout(() => {
+        setTimeout(async () => {
             const winnerRole = determineRoundWinner(initiatorMove, receiverMove);
-            const outcome = minigameActionData.outcomes[initiatorMove]?.[receiverMove];
 
-            if (outcome && resultImage && resultNarrative && graphicalResultDisplay) {
-                resultNarrative.textContent = outcome.narrative;
-                const randomSeed = Math.floor(Math.random() * 65536);
-                resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(outcome.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
-                graphicalResultDisplay.classList.remove('hidden');
+            // Dynamically get the outcome visualization
+            try {
+                const outcome = await getMinigameRoundOutcome(initiatorMove, receiverMove, winnerRole, isDateExplicit, callGeminiApiWithRetry);
+                if (outcome && resultImage && resultNarrative && graphicalResultDisplay) {
+                    resultNarrative.textContent = outcome.narrative;
+                    const randomSeed = Math.floor(Math.random() * 65536);
+                    resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(outcome.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
+                    graphicalResultDisplay.classList.remove('hidden');
+                }
+            } catch (e) {
+                console.error("Could not generate round outcome visualization:", e);
             }
 
 
@@ -1962,7 +1969,7 @@ function checkForRoundCompletion() {
             } else {
                 minigameRound++;
                 player1IsInitiator = !player1IsInitiator; // Swap roles
-                setTimeout(resetRoundUI, 4000); // Increased delay to show image
+                setTimeout(resetRoundUI, 5000); // Increased delay to show image
             }
         }, 2500); // 2.5 second delay to show moves
     }
