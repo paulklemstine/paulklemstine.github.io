@@ -123,3 +123,8 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 `,
 
 }
+
+export const sceneFeatures = {
+    locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
+    vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
+};

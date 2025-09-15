@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts} from './prompts.js';
+import {geemsPrompts, sceneFeatures} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -17,6 +17,15 @@ let apiKeyLocked = false;
 let localGameStateSnapshot = null; // To store local state when viewing remote state
 let llmCallHistory = []; // For the debug panel
 
+// --- Spinner State ---
+let isSpinnerRunning = false;
+let spinnerCompletionCallback = null;
+let spinnerAngle = 0;
+let spinnerVelocity = 0;
+let lastSpinnerFrameTime = 0;
+const FRICTION = 0.99;
+const MIN_SPINNER_VELOCITY = 0.005;
+
 // --- Minigame State ---
 let minigameActive = false;
 let minigameCompletionCallback = null;
@@ -24,6 +33,8 @@ let playerScore = 0;
 let partnerScore = 0;
 let playerMove = null;
 let partnerMove = null;
+let minigameRound = 1;
+let player1IsInitiator = true;
 
 // --- Model Switching State ---
 const AVAILABLE_MODELS = [
@@ -78,9 +89,20 @@ const minigameSubtitle = document.getElementById('minigame-subtitle');
 const playerScoreDisplay = document.getElementById('player-score');
 const partnerScoreDisplay = document.getElementById('partner-score');
 const roundResultDisplay = document.getElementById('minigame-round-result');
-const kissButton = document.getElementById('kiss-button');
-const cuddleButton = document.getElementById('cuddle-button');
-const counterButton = document.getElementById('counter-button');
+
+const initiatorControls = document.getElementById('initiator-controls');
+const receiverControls = document.getElementById('receiver-controls');
+const initiatorKissButton = document.getElementById('initiator-kiss-button');
+const initiatorHoldHandsButton = document.getElementById('initiator-hold-hands-button');
+const receiverAcceptButton = document.getElementById('receiver-accept-button');
+const receiverLeanAwayButton = document.getElementById('receiver-lean-away-button');
+const receiverTeaseButton = document.getElementById('receiver-tease-button');
+
+// --- Spinner Elements ---
+const spinnerModal = document.getElementById('spinner-modal');
+const spinnerTitle = document.getElementById('spinner-title');
+const spinnerWheel = document.getElementById('spinner-wheel');
+const spinnerResult = document.getElementById('spinner-result');
 
 // --- Web Audio API Context ---
 let audioCtx = null;
@@ -88,6 +110,7 @@ let audioCtx = null;
 // --- Multiplayer State ---
 let isDateActive = false;
 let currentPartnerId = null;
+let sceneSelections = new Map();
 let amIPlayer1 = false;
 let turnSubmissions = new Map(); // New state for turn aggregation
 let incomingProposal = null;
@@ -1765,190 +1788,34 @@ function handleRoomPeerLeft(peerId) {
     renderLobby();
 }
 
-// --- Spinner Mini-Game Functions ---
-
-function populateSpinner(wheelElement, mode) {
-    if (!wheelElement) return;
-    wheelElement.innerHTML = '';
-
-    const items = (mode === 'scenes') ? geemsPrompts.firstDateScenes : geemsPrompts.prizeItems;
-    const numSegments = items.length;
-    if (numSegments === 0) return;
-    const anglePerSegment = 360 / numSegments;
-
-    const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
-
-    items.forEach((item, index) => {
-        const segment = document.createElement('div');
-        segment.className = 'spinner-segment';
-
-        const content = document.createElement('div');
-        content.className = 'segment-content';
-        content.textContent = item;
-
-        segment.style.backgroundColor = colors[index % colors.length];
-
-        const rotation = index * anglePerSegment;
-        segment.style.transform = `rotate(${rotation}deg)`;
-
-        // Adjust content rotation to center the symbol in the wedge
-        content.style.transform = `rotate(${anglePerSegment / 2}deg)`;
-
-        spinnerWheel.appendChild(segment);
-        segment.appendChild(content);
-    });
-}
-
-function startSpinner(mode, onComplete) {
-    console.log(`Starting spinner in ${mode} mode...`);
-    isSpinnerRunning = true;
-    spinnerCompletionCallback = onComplete;
-    isPrizeMode = (mode === 'prizes');
-
-    localNudgesLeft = 3;
-    spinnerAngle = 0; // Radians
-
-    if (spinnerModal) {
-        spinnerTitle.textContent = isPrizeMode ? 'Spin for a Prize!' : 'Spin for Your First Date!';
-        spinnerModal.style.display = 'flex';
-    }
-    if (spinnerWheel) spinnerWheel.style.transition = 'none';
-    if (nudgesLeftDisplay) nudgesLeftDisplay.textContent = localNudgesLeft;
-    if (nudgeButton) nudgeButton.disabled = false;
-    if (spinnerResult) spinnerResult.style.display = 'none';
-
-    populateSpinner(spinnerWheel, mode);
-
-    if (amIPlayer1) {
-        spinnerVelocity = 5 + Math.random() * 5; // Initial random spin
-        lastSpinnerFrameTime = performance.now();
-        requestAnimationFrame(runSpinnerAnimation);
-    } else {
-        lastSpinnerFrameTime = performance.now();
-        requestAnimationFrame(runSpinnerAnimation);
-    }
-
-    if (nudgeButton) nudgeButton.onclick = handleNudge;
-}
-
-function runSpinnerAnimation(currentTime) {
-    if (!isSpinnerRunning) return;
-
-    if (lastSpinnerFrameTime === 0) {
-        lastSpinnerFrameTime = currentTime;
-        requestAnimationFrame(runSpinnerAnimation);
-        return;
-    }
-
-    const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
-    lastSpinnerFrameTime = currentTime;
-
-    if (amIPlayer1) {
-        if (spinnerVelocity !== 0) {
-            spinnerVelocity *= Math.pow(FRICTION, deltaTime * 60);
-        }
-        spinnerAngle += spinnerVelocity * deltaTime;
-
-        if (Math.abs(spinnerVelocity) < MIN_SPINNER_VELOCITY) {
-            spinnerVelocity = 0;
-            isSpinnerRunning = false;
-
-            const items = isPrizeMode ? geemsPrompts.prizeItems : geemsPrompts.firstDateScenes;
-            const numSegments = items.length;
-            const anglePerSegment = 360 / numSegments;
-            const finalAngleDegrees = (spinnerAngle * 180 / Math.PI);
-            const pointerAngle = 270;
-            const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
-            const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
-            const result = items[winningSegmentIndex];
-
-            console.log(`Spinner stopped. Result: ${result}`);
-
-            const resultPayload = { result: result, finalAngle: spinnerAngle };
-            MPLib.broadcastToRoom({ type: 'spinner_result', payload: resultPayload });
-            endSpinner(result, spinnerAngle);
-            return;
-        }
-
-        MPLib.sendDirectToRoomPeer(currentPartnerId, {
-            type: 'spinner_state_update',
-            payload: { angle: spinnerAngle, velocity: spinnerVelocity }
-        });
-    }
-
-    if (spinnerWheel) {
-        spinnerWheel.style.transform = `rotate(${spinnerAngle}rad)`;
-    }
-
-    requestAnimationFrame(runSpinnerAnimation);
-}
-
-function handleNudge() {
-    if (localNudgesLeft > 0 && isSpinnerRunning) {
-        localNudgesLeft--;
-        if (nudgesLeftDisplay) nudgesLeftDisplay.textContent = localNudgesLeft;
-
-        if (amIPlayer1) {
-            spinnerVelocity += NUDGE_STRENGTH;
-        } else {
-            MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'spinner_nudge' });
-        }
-
-        if (localNudgesLeft === 0) {
-            if (nudgeButton) nudgeButton.disabled = true;
-        }
-    }
-}
-
-function endSpinner(result, finalAngle) {
-    isSpinnerRunning = false;
-    lastSpinnerFrameTime = 0;
-    if (nudgeButton) nudgeButton.disabled = true;
-
-    if (spinnerWheel) {
-        spinnerWheel.style.transition = 'transform 2s ease-out';
-        spinnerWheel.style.transform = `rotate(${finalAngle}rad)`;
-    }
-
-    if (spinnerResult) {
-        spinnerResult.textContent = isPrizeMode ? `You won: ${result}!` : `Destination: ${result}!`;
-        spinnerResult.style.display = 'block';
-    }
-
-    setTimeout(() => {
-        if (spinnerModal) spinnerModal.style.display = 'none';
-        if (spinnerCompletionCallback) {
-            spinnerCompletionCallback(result);
-        }
-    }, 4000);
-}
-
 // --- Minigame Functions ---
 
 function startMinigame(onComplete) {
-    console.log("Starting Minigame...");
+    console.log("Starting 'Make a Move' Minigame...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
     playerScore = 0;
     partnerScore = 0;
-    playerMove = null;
-    partnerMove = null;
+    minigameRound = 1;
+    player1IsInitiator = true; // Player 1 always starts as the initiator
 
     updateScoreboard();
     resetRoundUI();
 
     if (minigameModal) minigameModal.style.display = 'flex';
 
-    kissButton.onclick = () => handlePlayerMove('kiss');
-    cuddleButton.onclick = () => handlePlayerMove('cuddle');
-    counterButton.onclick = () => handlePlayerMove('counter');
+    initiatorKissButton.onclick = () => handlePlayerMove('kiss');
+    initiatorHoldHandsButton.onclick = () => handlePlayerMove('hold_hands');
+    receiverAcceptButton.onclick = () => handlePlayerMove('accept');
+    receiverLeanAwayButton.onclick = () => handlePlayerMove('lean_away');
+    receiverTeaseButton.onclick = () => handlePlayerMove('tease');
 }
 
 function handlePlayerMove(move) {
     if (!playerMove) {
         playerMove = move;
         setMoveButtonsDisabled(true);
-        roundResultDisplay.textContent = `You chose ${move}. Waiting for partner...`;
+        roundResultDisplay.textContent = `You chose your move. Waiting for partner...`;
         MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_move', payload: { move: move } });
         checkForRoundCompletion();
     }
@@ -1956,46 +1823,63 @@ function handlePlayerMove(move) {
 
 function checkForRoundCompletion() {
     if (playerMove && partnerMove) {
-        console.log(`Round complete: You chose ${playerMove}, partner chose ${partnerMove}`);
-        const outcome = determineRoundWinner(playerMove, partnerMove);
+        const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
 
-        if (outcome === 'win') {
-            playerScore++;
-            roundResultDisplay.textContent = `You won the round! (${playerMove} beats ${partnerMove})`;
-            roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold win';
-        } else if (outcome === 'lose') {
-            partnerScore++;
-            roundResultDisplay.textContent = `You lost the round! (${partnerMove} beats ${playerMove})`;
-            roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold lose';
+        let initiatorMove, receiverMove;
+        if (iAmInitiator) {
+            initiatorMove = playerMove;
+            receiverMove = partnerMove;
         } else {
-            roundResultDisplay.textContent = `It's a tie! (Both chose ${playerMove})`;
-            roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold tie';
+            initiatorMove = partnerMove;
+            receiverMove = playerMove;
         }
 
+        console.log(`Round ${minigameRound} complete. Initiator: ${initiatorMove}, Receiver: ${receiverMove}`);
+        const winnerRole = determineRoundWinner(initiatorMove, receiverMove);
+
+        let roundMessage = "It's a draw this round!";
+        if (winnerRole) {
+             const iAmWinner = (iAmInitiator && winnerRole === 'initiator') || (!iAmInitiator && winnerRole === 'receiver');
+             if (iAmWinner) {
+                 playerScore++;
+                 roundMessage = "You won the round!";
+             } else {
+                 partnerScore++;
+                 roundMessage = "Your partner won the round.";
+             }
+        }
+
+        roundResultDisplay.textContent = roundMessage;
         updateScoreboard();
 
         if (playerScore >= 2 || partnerScore >= 2) {
             endMinigame();
         } else {
-            setTimeout(resetRoundUI, 2500);
+            minigameRound++;
+            player1IsInitiator = !player1IsInitiator; // Swap roles
+            setTimeout(resetRoundUI, 3000);
         }
     }
 }
 
-function determineRoundWinner(p1, p2) {
-    if (p1 === p2) return 'tie';
-    if ( (p1 === 'kiss' && p2 === 'cuddle') ||
-         (p1 === 'cuddle' && p2 === 'counter') ||
-         (p1 === 'counter' && p2 === 'kiss') ) {
-        return 'win';
+function determineRoundWinner(initiatorMove, receiverMove) {
+    // Returns 'initiator', 'receiver', or null for no winner.
+    if (initiatorMove === 'kiss') {
+        if (receiverMove === 'accept') return 'initiator';
+        if (receiverMove === 'lean_away') return 'receiver';
+        if (receiverMove === 'tease') return 'receiver';
+    } else if (initiatorMove === 'hold_hands') {
+        if (receiverMove === 'accept') return 'initiator';
+        if (receiverMove === 'lean_away') return 'receiver';
+        if (receiverMove === 'tease') return 'receiver';
     }
-    return 'lose';
+    return null;
 }
 
 function endMinigame() {
     minigameActive = false;
     const winner = playerScore > partnerScore ? 'player' : 'partner';
-    minigameSubtitle.textContent = `Game over! You ${winner === 'player' ? 'WON!' : 'LOST!'}`;
+    minigameSubtitle.textContent = `Game Over! You ${winner === 'player' ? 'WON!' : 'LOST!'}`;
     setMoveButtonsDisabled(true);
 
     setTimeout(() => {
@@ -2009,8 +1893,19 @@ function endMinigame() {
 function resetRoundUI() {
     playerMove = null;
     partnerMove = null;
-    roundResultDisplay.textContent = 'Choose your move!';
-    roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold';
+
+    const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
+
+    if (iAmInitiator) {
+        roundResultDisplay.textContent = `Round ${minigameRound}: Make your move...`;
+        initiatorControls.style.display = 'block';
+        receiverControls.style.display = 'none';
+    } else {
+        roundResultDisplay.textContent = `Round ${minigameRound}: Respond to your partner...`;
+        initiatorControls.style.display = 'none';
+        receiverControls.style.display = 'block';
+    }
+
     setMoveButtonsDisabled(false);
 }
 
@@ -2020,9 +1915,11 @@ function updateScoreboard() {
 }
 
 function setMoveButtonsDisabled(disabled) {
-    kissButton.disabled = disabled;
-    cuddleButton.disabled = disabled;
-    counterButton.disabled = disabled;
+    initiatorKissButton.disabled = disabled;
+    initiatorHoldHandsButton.disabled = disabled;
+    receiverAcceptButton.disabled = disabled;
+    receiverLeanAwayButton.disabled = disabled;
+    receiverTeaseButton.disabled = disabled;
 }
 
 function handleRoomDataReceived(senderId, data) {
@@ -2054,6 +1951,27 @@ function handleRoomDataReceived(senderId, data) {
             showNotification(`Your date with ${senderId.slice(-4)} was declined.`, "warn");
             break;
 
+        case 'scene_selection_submission':
+            console.log(`Received scene selections from ${senderId.slice(-6)}`);
+            if (isDateActive) {
+                sceneSelections.set(senderId, data.payload);
+                checkForSceneSelectionCompletion();
+            }
+            break;
+
+        case 'spinner_state_update':
+            if (isSpinnerRunning && !amIPlayer1) {
+                const { angle } = data.payload;
+                spinnerAngle = angle;
+            }
+            break;
+        case 'spinner_result':
+            if (isSpinnerRunning && !amIPlayer1) {
+                const { result, finalAngle } = data.payload;
+                endSpinner(result, finalAngle);
+            }
+            break;
+
         case 'minigame_move':
             if (minigameActive && !partnerMove) {
                 partnerMove = data.payload.move;
@@ -2064,25 +1982,6 @@ function handleRoomDataReceived(senderId, data) {
             if (button) {
                 button.disabled = false;
                 button.textContent = 'Propose Date';
-            }
-            break;
-
-        case 'spinner_state_update':
-            if (isSpinnerRunning && !amIPlayer1) {
-                const { angle, velocity } = data.payload;
-                spinnerAngle = angle;
-                spinnerVelocity = velocity;
-            }
-            break;
-        case 'spinner_nudge':
-            if (amIPlayer1 && isSpinnerRunning) {
-                spinnerVelocity += NUDGE_STRENGTH;
-            }
-            break;
-        case 'spinner_result':
-            if (isSpinnerRunning && !amIPlayer1) {
-                const { result, finalAngle } = data.payload;
-                endSpinner(result, finalAngle);
             }
             break;
 
@@ -2468,6 +2367,7 @@ function startNewDate(partnerId, iAmPlayer1) {
     currentPartnerId = partnerId;
     amIPlayer1 = iAmPlayer1;
     turnSubmissions.clear(); // Ensure clean state for the new date
+    sceneSelections.clear();
 
     // Hide lobby, show game
     const directoryContainer = document.getElementById('global-directory-container');
@@ -2475,25 +2375,76 @@ function startNewDate(partnerId, iAmPlayer1) {
     if(lobbyContainer) lobbyContainer.style.display = 'none';
     if(gameWrapper) gameWrapper.style.display = 'block';
 
-    const partnerMasterId = MPLib.getRoomConnections()?.get(partnerId)?.metadata?.masterId;
-    const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile;
-    const partnerName = partnerProfile?.name || `User-${partnerId.slice(-4)}`;
+    startSceneSelection();
+}
 
-    uiContainer.innerHTML = `<div class="text-center p-8"><h2>A new date with ${partnerName} is starting!</h2><p>First, a little game...</p></div>`;
+function startSceneSelection() {
+    console.log("Starting scene selection...");
+    uiContainer.innerHTML = `<div class="text-center p-8"><h2>Let's set the scene...</h2><p>Choose some elements for your first date. Your choices will be combined with your partner's to create the setting.</p></div>`;
 
-    startMinigame((winner) => {
-        // For the first turn, we don't have a scene, so we just pass the winner.
-        // The orchestrator will invent a scene.
+    const selectionUI = [];
+    const locationOptions = sceneFeatures.locations.sort(() => 0.5 - Math.random()).slice(0, 4);
+    const vibeOptions = sceneFeatures.vibes.sort(() => 0.5 - Math.random()).slice(0, 4);
+
+    locationOptions.forEach(loc => {
+        selectionUI.push({ type: 'checkbox', name: `loc_${loc.replace(/\s+/g, '_')}`, label: loc, value: false, color: '#FFFFFF' });
+    });
+    vibeOptions.forEach(vibe => {
+        selectionUI.push({ type: 'checkbox', name: `vibe_${vibe.replace(/\s+/g, '_')}`, label: vibe, value: false, color: '#FFFFFF' });
+    });
+
+    renderUI(selectionUI);
+
+    const submitSelectionsButton = document.createElement('button');
+    submitSelectionsButton.id = 'submit-scene-selections';
+    submitSelectionsButton.className = 'geems-button mt-4';
+    submitSelectionsButton.textContent = 'Submit Selections';
+    uiContainer.appendChild(submitSelectionsButton);
+
+    submitSelectionsButton.onclick = () => {
+        const selections = {};
+        uiContainer.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            if (checkbox.checked) {
+                selections[checkbox.name] = checkbox.labels[0].textContent;
+            }
+        });
+
+        console.log("My scene selections:", selections);
+        MPLib.broadcastToRoom({ type: 'scene_selection_submission', payload: selections });
+
+        const myRoomId = MPLib.getLocalRoomId();
+        sceneSelections.set(myRoomId, selections);
+
+        uiContainer.innerHTML = `<div class="text-center p-8"><h2>Selections submitted.</h2><p>Waiting for your partner...</p></div>`;
+        checkForSceneSelectionCompletion();
+    };
+}
+
+function checkForSceneSelectionCompletion() {
+    if (sceneSelections.size < 2) {
+        return;
+    }
+    console.log("Both players have submitted scene selections.");
+
+    const allSelections = [];
+    for (const selections of sceneSelections.values()) {
+        for (const key in selections) {
+            allSelections.push(selections[key]);
+        }
+    }
+
+    const uniqueSelections = [...new Set(allSelections)];
+    console.log("Combined unique selections for spinner:", uniqueSelections);
+
+    startSpinner(uniqueSelections, (winningScene) => {
         if (amIPlayer1) {
-            fetchFirstTurn(winner);
-        } else {
-            setLoading(true, true);
+            fetchFirstTurn(null, winningScene); // No minigame winner for this flow
         }
     });
 }
 
-async function fetchFirstTurn(minigameWinner) {
-    console.log(`Fetching first turn. Minigame winner: ${minigameWinner}`);
+async function fetchFirstTurn(minigameWinner, scene) {
+    console.log(`Fetching first turn. Minigame winner: ${minigameWinner}, Scene: ${scene}`);
     const loadingText = document.getElementById('loading-text');
     if (loadingText) {
         loadingText.textContent = 'Inventing a new scenario... Please wait.';
@@ -2510,10 +2461,10 @@ async function fetchFirstTurn(minigameWinner) {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
         // The notes provide a clear starting point for the orchestrator AI.
-        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. The minigame result has already been passed to you. ${profileString}`,
-        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
+        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
+        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
         isExplicit: isDateExplicit,
-        minigameWinner: minigameWinner,
+        minigameWinner: minigameWinner, // This will be null, but we pass it anyway
         // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
         isFirstTurn: true
     };
@@ -2731,6 +2682,142 @@ window.hideInterstitial = function() {
     if (screen) {
         screen.style.display = 'none';
     }
+}
+
+// --- Spinner Mini-Game Functions ---
+
+function populateSpinner(wheelElement, items) {
+    if (!wheelElement) return;
+    wheelElement.innerHTML = '';
+
+    const numSegments = items.length;
+    if (numSegments === 0) return;
+    const anglePerSegment = 360 / numSegments;
+
+    const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+
+    items.forEach((item, index) => {
+        const segment = document.createElement('div');
+        segment.className = 'spinner-segment';
+
+        const content = document.createElement('div');
+        content.className = 'segment-content';
+        content.textContent = item;
+
+        segment.style.backgroundColor = colors[index % colors.length];
+
+        const rotation = index * anglePerSegment;
+        segment.style.transform = `rotate(${rotation}deg)`;
+
+        const contentRotation = anglePerSegment / 2;
+        content.style.transform = `rotate(${contentRotation}deg) translate(0px, -50%)`;
+        content.style.left = '50%';
+        content.style.top = '25%';
+
+        wheelElement.appendChild(segment);
+        segment.appendChild(content);
+    });
+}
+
+function startSpinner(items, onComplete) {
+    console.log(`Starting scene spinner...`);
+    isSpinnerRunning = true;
+    spinnerCompletionCallback = onComplete;
+
+    spinnerAngle = 0;
+
+    if (spinnerModal) {
+        spinnerTitle.textContent = 'Spinning for the Scene!';
+        spinnerModal.style.display = 'flex';
+    }
+    if (spinnerWheel) spinnerWheel.style.transition = 'none';
+    if (spinnerResult) spinnerResult.style.display = 'none';
+
+    populateSpinner(spinnerWheel, items);
+
+    if (amIPlayer1) {
+        spinnerVelocity = 5 + Math.random() * 5;
+        lastSpinnerFrameTime = performance.now();
+        requestAnimationFrame(runSpinnerAnimation);
+    } else {
+        lastSpinnerFrameTime = performance.now();
+        requestAnimationFrame(runSpinnerAnimation);
+    }
+}
+
+function runSpinnerAnimation(currentTime) {
+    if (!isSpinnerRunning) return;
+
+    if (lastSpinnerFrameTime === 0) {
+        lastSpinnerFrameTime = currentTime;
+        requestAnimationFrame(runSpinnerAnimation);
+        return;
+    }
+
+    const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
+    lastSpinnerFrameTime = currentTime;
+
+    if (amIPlayer1) {
+        if (spinnerVelocity !== 0) {
+            spinnerVelocity *= Math.pow(FRICTION, deltaTime * 60);
+        }
+        spinnerAngle += spinnerVelocity * deltaTime;
+
+        if (Math.abs(spinnerVelocity) < MIN_SPINNER_VELOCITY) {
+            spinnerVelocity = 0;
+            isSpinnerRunning = false;
+
+            const items = [...sceneSelections.values()].flatMap(sel => Object.values(sel));
+            const uniqueItems = [...new Set(items)];
+            const numSegments = uniqueItems.length;
+            const anglePerSegment = 360 / numSegments;
+            const finalAngleDegrees = (spinnerAngle * 180 / Math.PI);
+            const pointerAngle = 270;
+            const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
+            const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
+            const result = uniqueItems[winningSegmentIndex];
+
+            console.log(`Spinner stopped. Result: ${result}`);
+
+            const resultPayload = { result: result, finalAngle: spinnerAngle };
+            MPLib.broadcastToRoom({ type: 'spinner_result', payload: resultPayload });
+            endSpinner(result, spinnerAngle);
+            return;
+        }
+
+        MPLib.broadcastToRoom({
+            type: 'spinner_state_update',
+            payload: { angle: spinnerAngle }
+        });
+    }
+
+    if (spinnerWheel) {
+        spinnerWheel.style.transform = `rotate(${spinnerAngle}rad)`;
+    }
+
+    requestAnimationFrame(runSpinnerAnimation);
+}
+
+function endSpinner(result, finalAngle) {
+    isSpinnerRunning = false;
+    lastSpinnerFrameTime = 0;
+
+    if (spinnerWheel) {
+        spinnerWheel.style.transition = 'transform 2s ease-out';
+        spinnerWheel.style.transform = `rotate(${finalAngle}rad)`;
+    }
+
+    if (spinnerResult) {
+        spinnerResult.textContent = `Scene: ${result}!`;
+        spinnerResult.style.display = 'block';
+    }
+
+    setTimeout(() => {
+        if (spinnerModal) spinnerModal.style.display = 'none';
+        if (spinnerCompletionCallback) {
+            spinnerCompletionCallback(result);
+        }
+    }, 4000);
 }
 
 // Ensure DOM is fully loaded before initializing
