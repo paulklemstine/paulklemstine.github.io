@@ -104,6 +104,7 @@ const MIN_SPINNER_VELOCITY = 0.002;
 const NUDGE_STRENGTH = 1.5;
 let lastSpinnerFrameTime = 0;
 let spinnerCompletionCallback = null;
+let isPrizeMode = false;
 
 // --- Helper Functions ---
 
@@ -1327,20 +1328,7 @@ function setLoading(loading, isFirstTurn = false) {
             // Reset and show the interstitial screen
             const interstitialWheel = document.getElementById('interstitial-spinner-wheel');
             if(interstitialWheel) {
-                 populateSpinner('prizes'); // This will populate the main wheel, need to adapt it
-                 // A quick adaptation:
-                 const prizes = geemsPrompts.prizeItems;
-                 const numSegments = prizes.length;
-                 const anglePerSegment = 360 / numSegments;
-                 const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
-                 interstitialWheel.innerHTML = '';
-                 prizes.forEach((prize, index) => {
-                    const segment = document.createElement('div');
-                    segment.className = 'spinner-segment';
-                    segment.style.backgroundColor = colors[index % colors.length];
-                    segment.style.transform = `rotate(${index * anglePerSegment}deg)`;
-                    interstitialWheel.appendChild(segment);
-                 });
+                 populateSpinner(interstitialWheel, 'prizes');
             }
 
             interstitialSpinner.style.display = 'flex';
@@ -1772,9 +1760,9 @@ function handleRoomPeerLeft(peerId) {
 
 // --- Spinner Mini-Game Functions ---
 
-function populateSpinner(mode) {
-    if (!spinnerWheel) return;
-    spinnerWheel.innerHTML = '';
+function populateSpinner(wheelElement, mode) {
+    if (!wheelElement) return;
+    wheelElement.innerHTML = '';
 
     const items = (mode === 'scenes') ? geemsPrompts.firstDateScenes : geemsPrompts.prizeItems;
     const numSegments = items.length;
@@ -1821,7 +1809,7 @@ function startSpinner(mode, onComplete) {
     if (nudgeButton) nudgeButton.disabled = false;
     if (spinnerResult) spinnerResult.style.display = 'none';
 
-    populateSpinner(mode);
+    populateSpinner(spinnerWheel, mode);
 
     if (amIPlayer1) {
         spinnerVelocity = 5 + Math.random() * 5; // Initial random spin
