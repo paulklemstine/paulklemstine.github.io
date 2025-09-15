@@ -124,27 +124,27 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 
     // --- Data for Spinner ---
     firstDateScenes: [
-        "Axe-throwing bar",
-        "Fancy restaurant",
-        "Dive bar",
-        "Strip club",
-        "Public library",
-        "Bougie coffee shop",
-        "Picnic in a graveyard",
-        "Art gallery",
-        "Seedy motel room",
-        "Beach at sunset",
-        "High school reunion",
-        "Abandoned theme park"
+        "🪓", // Axe-throwing
+        "🍷", // Fancy restaurant
+        "🍺", // Dive bar
+        "👠", // Strip club
+        "📚", // Public library
+        "☕", // Bougie coffee shop
+        "🪦", // Graveyard
+        "🎨", // Art gallery
+        "🏩", // Seedy motel
+        "🏖️", // Beach
+        "🎓", // High school
+        "🎡"  // Theme park
     ],
     prizeItems: [
-        "Good Fortune",
-        "A Winning Smile",
-        "Mystery Box",
-        "A Single Red Rose",
-        "Secret Admirer",
-        "Cosmic High-Five",
-        "Pocket Full of Sunshine",
-        "A Moment of Clarity"
+        "🍀", // Good Fortune
+        "😊", // A Winning Smile
+        "❓", // Mystery Box
+        "🌹", // A Single Red Rose
+        "💌", // Secret Admirer
+        "✨", // Cosmic High-Five
+        "☀️", // Pocket Full of Sunshine
+        "💡"  // A Moment of Clarity
     ]
 }

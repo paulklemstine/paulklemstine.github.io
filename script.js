@@ -1784,7 +1784,8 @@ function populateSpinner(wheelElement, mode) {
         const rotation = index * anglePerSegment;
         segment.style.transform = `rotate(${rotation}deg)`;
 
-        content.style.transform = `rotate(${anglePerSegment / 2}deg) translate(30px) rotate(-90deg)`;
+        // Adjust content rotation to center the symbol in the wedge
+        content.style.transform = `rotate(${anglePerSegment / 2}deg)`;
 
         spinnerWheel.appendChild(segment);
         segment.appendChild(content);
