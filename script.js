@@ -3035,56 +3035,6 @@ function startSpinner(spinnersData, onComplete) {
     }
 }
 
-function runSpinnerAnimation(currentTime) {
-    if (activeSpinners.every(s => !s.isSpinning)) {
-        if (amIPlayer1) endSpinner();
-        return;
-    }
-
-    const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
-    lastSpinnerFrameTime = currentTime;
-
-    let stillSpinningCount = 0;
-    activeSpinners.forEach(spinner => {
-        if (!spinner.isSpinning) return;
-
-        if (amIPlayer1) {
-            spinner.velocity *= Math.pow(FRICTION, deltaTime * 60);
-            if (Math.abs(spinner.velocity) < MIN_SPINNER_VELOCITY) {
-                spinner.velocity = 0;
-                spinner.isSpinning = false;
-                // Determine result now that it has stopped
-                const numSegments = spinner.items.length;
-                if (numSegments > 0) {
-                    const anglePerSegment = 360 / numSegments;
-                    const finalAngleDegrees = (spinner.angle * 180 / Math.PI);
-                    const pointerAngle = 270;
-                    const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
-                    const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
-                    spinner.result = spinner.items[winningSegmentIndex];
-                    console.log(`Spinner ${spinner.id} stopped. Result: ${spinner.result}`);
-                }
-            } else {
-                stillSpinningCount++;
-            }
-            spinner.angle += spinner.velocity * deltaTime;
-        }
-
-        spinner.wheelElement.style.transform = `rotate(${spinner.angle}rad)`;
-    });
-
-    if (amIPlayer1) {
-        const spinnerStates = activeSpinners.map(s => ({
-            id: s.id,
-            angle: s.angle,
-            isSpinning: s.isSpinning,
-            result: s.result
-        }));
-        MPLib.broadcastToRoom({ type: 'spinner_state_update', payload: { spinners: spinnerStates } });
-    }
-
-    requestAnimationFrame(runSpinnerAnimation);
-}
 
 function endSpinner() {
     isSpinnerRunning = false;
