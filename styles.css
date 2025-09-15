@@ -705,78 +705,34 @@ body {
     overflow-y: auto;
 }
 
-/* --- Spinner Mini-Game --- */
-#spinner-container {
-    position: relative;
-    width: 300px; /* Zoomed out */
-    height: 300px; /* Zoomed out */
-    margin: 1rem auto;
+/* --- Kissing Minigame --- */
+.minigame-button {
+    font-size: 1.5rem;
+    padding: 1rem 1.5rem;
+    transition: all 0.2s ease-in-out;
 }
 
-.spinner-wheel {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    border: 8px solid #ff8fab; /* Kawaii pink border */
-    background: #fff0f5; /* Lavender blush background */
-    position: relative;
-    overflow: hidden;
-    transition: transform 4s cubic-bezier(0.25, 0.1, 0.25, 1);
-    box-shadow: 0 0 20px rgba(255, 143, 171, 0.5), inset 0 0 15px rgba(0,0,0,0.1);
+.minigame-button:hover:not(:disabled) {
+    transform: translateY(-4px) scale(1.05);
+    box-shadow: 0 8px 15px rgba(251, 111, 146, 0.4);
 }
 
-.spinner-pointer {
-    position: absolute;
-    top: -20px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 0;
-    height: 0;
-    border-left: 25px solid transparent;
-    border-right: 25px solid transparent;
-    border-top: 40px solid #fb6f92; /* Darker pink */
-    z-index: 10;
-    filter: drop-shadow(0px 2px 2px rgba(0,0,0,0.3));
+.minigame-button:disabled {
+    background-color: #d8c9c9;
+    cursor: not-allowed;
+    opacity: 0.7;
+    transform: none;
+    box-shadow: none;
 }
 
-.spinner-segment {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    clip-path: polygon(50% 50%, 100% 50%, 100% 0, 50% 0); /* Default wedge */
-    transform-origin: 50% 50%;
+#minigame-round-result.win {
+    color: #198754; /* Green */
 }
 
-.spinner-segment .segment-content {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 50%;
-    padding-left: 10px;
-    transform: translateY(-50%);
-    text-align: center;
-    font-size: 28px; /* Larger symbols */
-    color: #5c3c3c;
-    text-shadow: 1px 1px 2px rgba(255,255,255,0.5);
+#minigame-round-result.lose {
+    color: #dc3545; /* Red */
 }
 
-#spinner-controls {
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.03); }
-    100% { transform: scale(1); }
-}
-
-#spinner-result {
-    color: #ff8fab;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
-}
-
-#interstitial-spinner-wheel {
-    animation: spin 8s linear infinite;
+#minigame-round-result.tie {
+    color: #6c757d; /* Gray */
 }

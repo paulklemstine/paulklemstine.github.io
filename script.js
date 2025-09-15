@@ -63,14 +63,16 @@ const toggleDebugPanelButton = document.getElementById('toggle-debug-panel');
 const debugPanelCloseButton = document.getElementById('debug-panel-close-btn');
 const debugLogsContainer = document.getElementById('debug-panel-logs');
 
-// --- Spinner Elements ---
-const spinnerModal = document.getElementById('spinner-modal');
-const spinnerTitle = document.getElementById('spinner-title');
-const spinnerWheel = document.getElementById('spinner-wheel');
-const spinnerPointer = document.getElementById('spinner-pointer');
-const nudgeButton = document.getElementById('nudge-button');
-const nudgesLeftDisplay = document.getElementById('nudges-left');
-const spinnerResult = document.getElementById('spinner-result');
+// --- Minigame Elements ---
+const minigameModal = document.getElementById('minigame-modal');
+const minigameTitle = document.getElementById('minigame-title');
+const minigameSubtitle = document.getElementById('minigame-subtitle');
+const playerScoreDisplay = document.getElementById('player-score');
+const partnerScoreDisplay = document.getElementById('partner-score');
+const roundResultDisplay = document.getElementById('minigame-round-result');
+const kissButton = document.getElementById('kiss-button');
+const cuddleButton = document.getElementById('cuddle-button');
+const counterButton = document.getElementById('counter-button');
 
 // --- Web Audio API Context ---
 let audioCtx = null;
@@ -93,18 +95,6 @@ const LOCAL_PROFILE_KEY = 'sparksync_userProfile';
 let pressTimer = null;
 let isLongPress = false;
 const longPressDuration = 750; // milliseconds
-
-// --- Spinner State ---
-let isSpinnerRunning = false;
-let spinnerAngle = 0;
-let spinnerVelocity = 0;
-let localNudgesLeft = 3;
-const FRICTION = 0.995;
-const MIN_SPINNER_VELOCITY = 0.002;
-const NUDGE_STRENGTH = 1.5;
-let lastSpinnerFrameTime = 0;
-let spinnerCompletionCallback = null;
-let isPrizeMode = false;
 
 // --- Helper Functions ---
 
@@ -144,11 +134,20 @@ function constructPrompt(promptType, turnData) {
         playerA_notes,
         playerB_notes,
         isExplicit = false,
-        isFirstTurn = false, // Extract the new flag
+        isFirstTurn = false,
+        minigameWinner = null, // new
         history = []
     } = turnData;
 
     const activeAddendum = isExplicit ? `\n\n---\n${geemsPrompts.masturbationModeAddendum}\n---\n` : "";
+    let minigameAddendum = '';
+    if (minigameWinner) {
+        // This function is only ever called by Player 1, who is always Player A in this context.
+        const winner = (minigameWinner === 'player') ? 'Player A' : 'Player B';
+        const loser = (winner === 'Player A') ? 'Player B' : 'Player A';
+        minigameAddendum = `\n\n---\nMINIGAME RESULT\n---\nThe pre-turn minigame was won by ${winner}. The loser was ${loser}. You MUST incorporate this result into the turn. Reward the winner with a small advantage, a moment of good luck, or a positive comment from their partner. You MUST punish the loser with a small disadvantage, an embarrassing moment, or a teasing comment from Dr. Gemini. Be creative and subtle.`;
+    }
+
     let prompt;
 
     switch (promptType) {
@@ -173,6 +172,7 @@ function constructPrompt(promptType, turnData) {
             prompt += `player_input_B: ${JSON.stringify(playerB_actions)}\n`;
             prompt += `previous_notes_B: \`\`\`markdown\n${playerB_notes}\n\`\`\`\n`;
             prompt += activeAddendum;
+            prompt += minigameAddendum;
             prompt += `\n--- Generate instructions for both players based on the above. ---`;
             if(isFirstTurn) console.log("Generated First Turn Orchestrator Prompt.");
             else console.log("Generated Orchestrator Prompt.");
@@ -682,13 +682,10 @@ function checkForTurnCompletion() {
         return;
     }
 
-    console.log("All turns received. Starting prize wheel and orchestrator call.");
+    console.log("All turns received. Starting minigame before next turn generation.");
 
-    // Both players start the prize spinner. The callback is null because this spinner
-    // will be hidden by the generateLocalTurn function when the next turn is ready.
-    startSpinner('prizes', null);
-
-    if (amIPlayer1) {
+    startMinigame((winner) => {
+        if (amIPlayer1) {
         const myRoomId = MPLib.getLocalRoomId();
         const partnerRoomId = roomConnections.keys().next().value;
         const playerA_actions = turnSubmissions.get(myRoomId);
@@ -707,7 +704,8 @@ function checkForTurnCompletion() {
             playerA_notes: playerA_actions.notes,
             playerB_notes: playerB_actions.notes,
             isExplicit: isDateExplicit,
-            history: historyQueue
+            history: historyQueue,
+            minigameWinner: winner
         });
 
         turnSubmissions.clear();
@@ -716,7 +714,7 @@ function checkForTurnCompletion() {
         console.log("I am Player 2. My work is done for this turn, waiting for P1.");
         turnSubmissions.clear();
     }
-}
+});
 
 async function initiateSinglePlayerTurn(turnData, history = []) {
     console.log("Initiating single-player turn...");
@@ -1916,6 +1914,108 @@ function endSpinner(result, finalAngle) {
     }, 4000);
 }
 
+// --- Minigame Functions ---
+
+function startMinigame(onComplete) {
+    console.log("Starting Minigame...");
+    minigameActive = true;
+    minigameCompletionCallback = onComplete;
+    playerScore = 0;
+    partnerScore = 0;
+    playerMove = null;
+    partnerMove = null;
+
+    updateScoreboard();
+    resetRoundUI();
+
+    if (minigameModal) minigameModal.style.display = 'flex';
+
+    kissButton.onclick = () => handlePlayerMove('kiss');
+    cuddleButton.onclick = () => handlePlayerMove('cuddle');
+    counterButton.onclick = () => handlePlayerMove('counter');
+}
+
+function handlePlayerMove(move) {
+    if (!playerMove) {
+        playerMove = move;
+        setMoveButtonsDisabled(true);
+        roundResultDisplay.textContent = `You chose ${move}. Waiting for partner...`;
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_move', payload: { move: move } });
+        checkForRoundCompletion();
+    }
+}
+
+function checkForRoundCompletion() {
+    if (playerMove && partnerMove) {
+        console.log(`Round complete: You chose ${playerMove}, partner chose ${partnerMove}`);
+        const outcome = determineRoundWinner(playerMove, partnerMove);
+
+        if (outcome === 'win') {
+            playerScore++;
+            roundResultDisplay.textContent = `You won the round! (${playerMove} beats ${partnerMove})`;
+            roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold win';
+        } else if (outcome === 'lose') {
+            partnerScore++;
+            roundResultDisplay.textContent = `You lost the round! (${partnerMove} beats ${playerMove})`;
+            roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold lose';
+        } else {
+            roundResultDisplay.textContent = `It's a tie! (Both chose ${playerMove})`;
+            roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold tie';
+        }
+
+        updateScoreboard();
+
+        if (playerScore >= 2 || partnerScore >= 2) {
+            endMinigame();
+        } else {
+            setTimeout(resetRoundUI, 2500);
+        }
+    }
+}
+
+function determineRoundWinner(p1, p2) {
+    if (p1 === p2) return 'tie';
+    if ( (p1 === 'kiss' && p2 === 'cuddle') ||
+         (p1 === 'cuddle' && p2 === 'counter') ||
+         (p1 === 'counter' && p2 === 'kiss') ) {
+        return 'win';
+    }
+    return 'lose';
+}
+
+function endMinigame() {
+    minigameActive = false;
+    const winner = playerScore > partnerScore ? 'player' : 'partner';
+    minigameSubtitle.textContent = `Game over! You ${winner === 'player' ? 'WON!' : 'LOST!'}`;
+    setMoveButtonsDisabled(true);
+
+    setTimeout(() => {
+        if (minigameModal) minigameModal.style.display = 'none';
+        if (minigameCompletionCallback) {
+            minigameCompletionCallback(winner);
+        }
+    }, 4000);
+}
+
+function resetRoundUI() {
+    playerMove = null;
+    partnerMove = null;
+    roundResultDisplay.textContent = 'Choose your move!';
+    roundResultDisplay.className = 'text-center h-8 mb-4 font-semibold';
+    setMoveButtonsDisabled(false);
+}
+
+function updateScoreboard() {
+    playerScoreDisplay.textContent = playerScore;
+    partnerScoreDisplay.textContent = partnerScore;
+}
+
+function setMoveButtonsDisabled(disabled) {
+    kissButton.disabled = disabled;
+    cuddleButton.disabled = disabled;
+    counterButton.disabled = disabled;
+}
+
 function handleRoomDataReceived(senderId, data) {
     console.log(`MPLib Event: Room data received from ${senderId.slice(-6)}`, data);
     if (!data || !data.type) {
@@ -1943,6 +2043,14 @@ function handleRoomDataReceived(senderId, data) {
         case 'date_declined':
             console.log(`Date proposal declined by ${senderId}`);
             showNotification(`Your date with ${senderId.slice(-4)} was declined.`, "warn");
+            break;
+
+        case 'minigame_move':
+            if (minigameActive && !partnerMove) {
+                partnerMove = data.payload.move;
+                console.log(`Partner chose ${partnerMove}`);
+                checkForRoundCompletion();
+            }
             const button = document.querySelector(`.propose-date-button[data-peer-id="${senderId}"]`);
             if (button) {
                 button.disabled = false;
@@ -2362,23 +2470,21 @@ function startNewDate(partnerId, iAmPlayer1) {
     const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile;
     const partnerName = partnerProfile?.name || `User-${partnerId.slice(-4)}`;
 
-    // This will be replaced by the actual first turn UI from the AI
-    uiContainer.innerHTML = `<div class="text-center p-8"><h2>Date with ${partnerName} has started!</h2><p>Spinning for a destination...</p></div>`;
+    uiContainer.innerHTML = `<div class="text-center p-8"><h2>A new date with ${partnerName} is starting!</h2><p>First, a little game...</p></div>`;
 
-    // Both players start the spinner minigame to decide the first scene.
-    // Player 1 will be responsible for fetching the turn after completion.
-    startSpinner('scenes', (winningScene) => {
+    startMinigame((winner) => {
+        // For the first turn, we don't have a scene, so we just pass the winner.
+        // The orchestrator will invent a scene.
         if (amIPlayer1) {
-            fetchFirstTurn(winningScene);
+            fetchFirstTurn(winner);
         } else {
-            // Player 2 just waits for the turn data to arrive.
             setLoading(true, true);
         }
     });
 }
 
-async function fetchFirstTurn(chosenScene = "A mysterious location") {
-    console.log(`Fetching first turn for scene: ${chosenScene}`);
+async function fetchFirstTurn(minigameWinner) {
+    console.log(`Fetching first turn. Minigame winner: ${minigameWinner}`);
     const loadingText = document.getElementById('loading-text');
     if (loadingText) {
         loadingText.textContent = 'Inventing a new scenario... Please wait.';
@@ -2395,9 +2501,10 @@ async function fetchFirstTurn(chosenScene = "A mysterious location") {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
         // The notes provide a clear starting point for the orchestrator AI.
-        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The chosen location is: ${chosenScene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
-        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The chosen location is: ${chosenScene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
+        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. The minigame result has already been passed to you. ${profileString}`,
+        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
         isExplicit: isDateExplicit,
+        minigameWinner: minigameWinner,
         // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
         isFirstTurn: true
     };

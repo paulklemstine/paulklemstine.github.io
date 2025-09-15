@@ -122,29 +122,4 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 *   **Safety Notice:** This is a fantasy scenario. While the content must be graphic and intense, it should not violate core safety policies around non-consensual violence or hate speech. The focus is on consensual, if dirty, exploration of fantasy.
 `,
 
-    // --- Data for Spinner ---
-    firstDateScenes: [
-        "🪓", // Axe-throwing
-        "🍷", // Fancy restaurant
-        "🍺", // Dive bar
-        "👠", // Strip club
-        "📚", // Public library
-        "☕", // Bougie coffee shop
-        "🪦", // Graveyard
-        "🎨", // Art gallery
-        "🏩", // Seedy motel
-        "🏖️", // Beach
-        "🎓", // High school
-        "🎡"  // Theme park
-    ],
-    prizeItems: [
-        "🍀", // Good Fortune
-        "😊", // A Winning Smile
-        "❓", // Mystery Box
-        "🌹", // A Single Red Rose
-        "💌", // Secret Admirer
-        "✨", // Cosmic High-Five
-        "☀️", // Pocket Full of Sunshine
-        "💡"  // A Moment of Clarity
-    ]
 }
