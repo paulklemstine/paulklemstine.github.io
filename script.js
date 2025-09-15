@@ -17,6 +17,14 @@ let apiKeyLocked = false;
 let localGameStateSnapshot = null; // To store local state when viewing remote state
 let llmCallHistory = []; // For the debug panel
 
+// --- Minigame State ---
+let minigameActive = false;
+let minigameCompletionCallback = null;
+let playerScore = 0;
+let partnerScore = 0;
+let playerMove = null;
+let partnerMove = null;
+
 // --- Model Switching State ---
 const AVAILABLE_MODELS = [
     "gemini-2.5-pro",
