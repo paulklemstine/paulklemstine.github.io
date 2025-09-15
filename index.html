@@ -123,13 +123,43 @@
 <div id="spinner-modal" class="modal" style="display: none;">
     <div class="modal-content">
         <h2 id="spinner-title" class="text-2xl font-bold text-center mb-4">Spin for Your Fate!</h2>
-        <div class="spinner-container">
-            <div class="spinner-pointer"></div>
-            <div id="spinner-wheel" class="spinner-wheel">
-                <!-- Segments will be populated by script.js -->
+        <div id="all-spinners-container" class="all-spinners-container">
+            <!-- Container for Spinner 1 -->
+            <div id="spinner-1-container" class="spinner-and-legend-container">
+                <h3 id="spinner-1-title" class="spinner-category-title"></h3>
+                <div class="spinner-container">
+                    <div class="spinner-pointer"></div>
+                    <div id="spinner-wheel-1" class="spinner-wheel">
+                        <!-- Segments will be populated by script.js -->
+                    </div>
+                </div>
+                <div id="spinner-1-legend" class="spinner-legend"></div>
+            </div>
+            <!-- Container for Spinner 2 -->
+            <div id="spinner-2-container" class="spinner-and-legend-container">
+                <h3 id="spinner-2-title" class="spinner-category-title"></h3>
+                <div class="spinner-container">
+                    <div class="spinner-pointer"></div>
+                    <div id="spinner-wheel-2" class="spinner-wheel">
+                        <!-- Segments will be populated by script.js -->
+                    </div>
+                </div>
+                <div id="spinner-2-legend" class="spinner-legend"></div>
+            </div>
+            <!-- Container for Spinner 3 -->
+            <div id="spinner-3-container" class="spinner-and-legend-container">
+                <h3 id="spinner-3-title" class="spinner-category-title"></h3>
+                <div class="spinner-container">
+                    <div class="spinner-pointer"></div>
+                    <div id="spinner-wheel-3" class="spinner-wheel">
+                        <!-- Segments will be populated by script.js -->
+                    </div>
+                </div>
+                <div id="spinner-3-legend" class="spinner-legend"></div>
             </div>
         </div>
         <div id="spinner-result" class="text-center text-2xl font-bold mt-4" style="display: none;"></div>
+        <button id="spin-button" class="geems-button mx-auto mt-4">Spin!</button>
     </div>
 </div>
 

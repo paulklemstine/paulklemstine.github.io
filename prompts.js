@@ -122,9 +122,42 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 *   **Safety Notice:** This is a fantasy scenario. While the content must be graphic and intense, it should not violate core safety policies around non-consensual violence or hate speech. The focus is on consensual, if dirty, exploration of fantasy.
 `,
 
-}
+    // New prompt for generating spinner content
+    sceneSpinnerPrompt: `// SCENE SPINNER GENERATOR V1.0 - JSON ONLY
+// YOUR DIRECTIVE: You are a creative engine for a dating game. Generate a valid, compact JSON object for three spinners that will determine the scene for a blind date.
+//
+// ### RULES ###
+// 1.  **JSON Object Structure:** Your entire output MUST be a single, valid JSON object. Do NOT wrap it in markdown.
+// 2.  **Top-Level Keys:** The object must have exactly three top-level keys: "Location", "Vibe", and "Activity".
+// 3.  **Category Structure:** The value for each key MUST be an array of 5-6 unique option objects.
+// 4.  **Option Object Structure:** Each option object in the arrays MUST have two string attributes:
+//     a) "name": The descriptive name of the option (e.g., "An abandoned lighthouse", "A tense silence").
+//     b) "symbol": A single, relevant Unicode emoji character that represents the name (e.g., "ð¯", "ð¤«").
+// 5.  **Variety is Key:** Provide creative, diverse, and interesting options. Avoid generic choices. Think of unusual places and feelings.
 
-export const sceneFeatures = {
-    locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
-    vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
-};
+// ### EXAMPLE OUTPUT ###
+// {
+//   "Location": [
+//     {"name": "A rooftop garden at midnight", "symbol": "ð🌃"},
+//     {"name": "An antique train car", "symbol": "ð"},
+//     {"name": "A dusty occult bookshop", "symbol": "ð"},
+//     {"name": "A bioluminescent cave", "symbol": "ðCave"},
+//     {"name": "A forgotten greenhouse", "symbol": "ð±"}
+//   ],
+//   "Vibe": [
+//     {"name": "Awkwardly charming", "symbol": "ð¤ª"},
+//     {"name": "Intellectually stimulating", "symbol": "ð§ "},
+//     {"name": "Slightly dangerous", "symbol": "â ï¸"},
+//     {"name": "Deeply romantic", "symbol": "ð"},
+//     {"name": "Surreal and dreamlike", "symbol": "ð"}
+//   ],
+//   "Activity": [
+//     {"name": "Solving a cryptic puzzle", "symbol": "ð"},
+//     {"name": "A competitive board game", "symbol": "ð²"},
+//     {"name": "Trying exotic street food", "symbol": "ð¤"},
+//     {"name": "Attending a local concert", "symbol": "ð¶"},
+//     {"name": "Sharing ghost stories", "symbol": "ð»"}
+//   ]
+// }
+`,
+}
