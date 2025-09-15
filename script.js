@@ -8,6 +8,7 @@ import MPLib from './mp.js';
 let hasPrimaryApiKeyFailed = false;
 let historyQueue = [];
 const MAX_HISTORY_SIZE = 10; // Keep track of the last 10 game turns
+let currentOrchestratorText = null; // The full text response from the orchestrator for the current turn
 let currentUiJson = null;
 let currentNotes = {};
 let currentSubjectId = "";
@@ -192,9 +193,37 @@ function constructPrompt(promptType, turnData) {
 
             // Add history section if it exists
             if (history && history.length > 0) {
-                const historyString = history.map((turn, index) =>
-                    `Turn ${history.length - index} ago:\n- UI displayed to player:\n${turn.ui}\n- Player actions taken:\n${turn.actions}`
-                ).join('\n\n');
+                const historyString = history.map((turn, index) => {
+                    // Safely parse actions to get notes, if possible
+                    let notes = "Notes not available in history for this turn.";
+                    try {
+                        const actionsObj = JSON.parse(turn.actions);
+                        if (actionsObj && actionsObj.notes) {
+                            notes = actionsObj.notes;
+                        }
+                    } catch (e) {
+                        console.warn(`Could not parse notes from history item #${index}`, e);
+                    }
+
+                    return `Turn ${history.length - index} ago:
+- Orchestrator Output (that generated the turn):
+\`\`\`
+${turn.orchestratorText || "Orchestrator text not available for this turn."}
+\`\`\`
+- Player-Facing UI (that the player saw):
+\`\`\`json
+${turn.ui}
+\`\`\`
+- Player Actions Taken (in response to the UI):
+\`\`\`json
+${turn.actions}
+\`\`\`
+- Dr. Gemini's Notes (at the end of the turn):
+\`\`\`markdown
+${notes}
+\`\`\`
+`
+                }).join('\n\n---\n\n'); // Separator for clarity
                 prompt += `\n\n---\nCONTEXT: LAST ${history.length} TURNS (Most recent first)\n---\n${historyString}`;
             }
 
@@ -430,13 +459,19 @@ function playTurnAlertSound() {
 /** Updates the history queue. */
 function updateHistoryQueue(playerActionsJson) {
     if (currentUiJson) {
-        const previousTurnData = {ui: JSON.stringify(currentUiJson), actions: playerActionsJson || "{}"};
+        const previousTurnData = {
+            ui: JSON.stringify(currentUiJson),
+            actions: playerActionsJson || "{}",
+            orchestratorText: currentOrchestratorText || "" // Add the captured orchestrator text
+        };
         const isDuplicate = historyQueue.some(item => JSON.stringify(item) === JSON.stringify(previousTurnData));
         if (isDuplicate) {
             console.log("Duplicate turn data detected, not adding to history queue.");
             return;
         }
-        if (historyQueue.length >= MAX_HISTORY_SIZE) historyQueue.shift();
+        if (historyQueue.length >= MAX_HISTORY_SIZE) {
+            historyQueue.shift();
+        }
         historyQueue.push(previousTurnData);
         console.log(`History Queue size: ${historyQueue.length}/${MAX_HISTORY_SIZE}`);
     }
@@ -767,6 +802,7 @@ async function initiateSinglePlayerTurn(turnData, history = []) {
 
         const orchestratorPrompt = constructPrompt('orchestrator', orchestratorTurnData);
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
+        currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
         // We only care about Player A's output for the single player.
         await generateLocalTurn(orchestratorText, 'player1');
@@ -793,6 +829,7 @@ async function initiateTurnAsPlayer1(turnData) {
         const orchestratorPrompt = constructPrompt('orchestrator', turnData);
         // The orchestrator now returns a single plain text block
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
+        currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
         // Send the entire text block to Player 2
         MPLib.sendDirectToRoomPeer(currentPartnerId, {
@@ -2026,6 +2063,7 @@ function handleRoomDataReceived(senderId, data) {
             break;
         case 'orchestrator_output':
             console.log(`Received orchestrator output from ${senderId}`);
+            currentOrchestratorText = data.payload; // Capture the orchestrator output
             if (isDateActive && !amIPlayer1) {
                 generateLocalTurn(data.payload, 'player2');
             }
@@ -2140,8 +2178,11 @@ submitButton.addEventListener('click', () => {
     submitButton.disabled = true; // Prevent double-clicks
 
     // --- Single source of truth for actions ---
-    const playerActions = JSON.parse(collectInputState());
+    const playerActionsJson = collectInputState();
+    updateHistoryQueue(playerActionsJson); // <-- BUG FIX: Actually update the history
+    const playerActions = JSON.parse(playerActionsJson);
     updateLocalProfileFromTurn(playerActions); // Update profile regardless of mode
+
 
     if (isDateActive) {
         // --- Symmetrical Two-Player Date Logic ---
