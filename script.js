@@ -69,6 +69,7 @@ const submitButton = document.getElementById('submit-turn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const errorDisplay = document.getElementById('error-display');
 const modeToggleButton = document.getElementById('modeToggleButton');
+const modelToggleButton = document.getElementById('model-toggle-button');
 const resetGameButton = document.getElementById('resetGameButton');
 const clipboardMessage = document.getElementById('clipboardMessage');
 // Assume footer exists, get reference to it
@@ -1471,6 +1472,23 @@ function updateModeButtonVisuals() {
     }
 }
 
+function updateModelToggleVisuals() {
+    if (!modelToggleButton) return;
+    // Index 0 is Pro (Quality), Index 1 is Flash (Speed)
+    if (currentModelIndex === 0) {
+        modelToggleButton.textContent = 'Mode: Quality';
+    } else {
+        modelToggleButton.textContent = 'Mode: Speed';
+    }
+}
+
+function toggleModel() {
+    currentModelIndex = (currentModelIndex + 1) % AVAILABLE_MODELS.length;
+    console.log(`Model switched to: ${AVAILABLE_MODELS[currentModelIndex]}`);
+    updateModelToggleVisuals();
+    autoSaveGameState();
+}
+
 // --- Multiplayer Functions ---
 
 /** Shows a basic notification */
@@ -2175,6 +2193,13 @@ modeToggleButton.addEventListener('click', () => {
     autoSaveGameState();
 });
 
+if (modelToggleButton) {
+    modelToggleButton.addEventListener('click', () => {
+        if (isLoading) return;
+        toggleModel();
+    });
+}
+
 resetGameButton.addEventListener('click', () => {
     if (isLoading || resetGameButton.disabled) return;
     if (confirm('Reset game? This will clear local progress. Are you sure?')) {
@@ -2545,8 +2570,40 @@ function switchToRoom(roomName, isPublic) {
     // of our new location once the connection is established.
 }
 
+function loadGameStateFromStorage() {
+    const savedStateJSON = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (savedStateJSON) {
+        try {
+            const savedState = JSON.parse(savedStateJSON);
+            // Restore state, with fallbacks for safety
+            currentUiJson = savedState.currentUiJson || null;
+            historyQueue = savedState.historyQueue || [];
+            isExplicitMode = savedState.isExplicitMode || false;
+            currentModelIndex = savedState.currentModelIndex || 0;
+
+            console.log("Game state loaded from localStorage.");
+
+            // Update UI based on loaded state
+            if (currentUiJson) {
+                renderUI(currentUiJson);
+                apiKeyLocked = true; // If we have game state, key must have been locked
+                resetGameButton.disabled = false;
+                 if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
+                 if(gameWrapper) gameWrapper.style.display = 'block';
+            }
+            updateModeButtonVisuals();
+            updateModelToggleVisuals();
+
+        } catch (error) {
+            console.error("Error loading game state from localStorage:", error);
+            localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear corrupted data
+        }
+    }
+}
+
 function initializeGame() {
     console.log("Initializing Flagged with new Master Directory architecture...");
+    loadGameStateFromStorage(); // Load saved state first
 
     // Handle interstitial continue button click
     interstitialContinueButton.addEventListener('click', () => {
@@ -2555,9 +2612,13 @@ function initializeGame() {
     });
 
     // Hide the game wrapper and show the lobby selection by default
-    if(gameWrapper) gameWrapper.style.display = 'none';
-    if(lobbyContainer) lobbyContainer.style.display = 'none';
-    if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'block';
+    // This logic might be overridden by loadGameStateFromStorage if there's a saved game
+    if (!currentUiJson) {
+        if(gameWrapper) gameWrapper.style.display = 'none';
+        if(lobbyContainer) lobbyContainer.style.display = 'none';
+        if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'block';
+    }
+
 
     populateLobbySelector(); // Populate dropdown with any saved/preset lobbies
 
