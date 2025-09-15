@@ -66,6 +66,7 @@ const interstitialReports = document.getElementById('interstitial-reports');
 const greenFlagReport = document.getElementById('green-flag-report');
 const redFlagReport = document.getElementById('red-flag-report');
 const interstitialContinueButton = document.getElementById('interstitial-continue-button');
+const firstDateLoadingModal = document.getElementById('first-date-loading-modal');
 const submitButton = document.getElementById('submit-turn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const errorDisplay = document.getElementById('error-display');
@@ -2090,6 +2091,13 @@ function handleRoomDataReceived(senderId, data) {
                 setLoading(false, true);
             }
             break;
+        case 'scene_options':
+            // Player 2 receives the options from Player 1
+            if (!amIPlayer1) {
+                console.log("Received scene options from Player 1:", data.payload);
+                startSceneSelection(data.payload);
+            }
+            break;
         case 'graceful_disconnect':
             console.log(`Received graceful disconnect from ${senderId.slice(-6)}`);
             // Manually close the connection. The 'onclose' handler in MPLib
@@ -2438,10 +2446,27 @@ async function startNewDate(partnerId, iAmPlayer1) {
     if(lobbyContainer) lobbyContainer.style.display = 'none';
     if(gameWrapper) gameWrapper.style.display = 'block';
 
-    // Pre-fetch all dynamic scene options based on the 18+ mode setting
-    const dynamicOptions = await getDynamicSceneOptions(isDateExplicit, callGeminiApiWithRetry);
-
-    startSceneSelection(dynamicOptions);
+    // Player 1 generates the scene options and shows a loading modal.
+    // Player 2 just waits.
+    if (amIPlayer1) {
+        if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'flex';
+        try {
+            const dynamicOptions = await getDynamicSceneOptions(isDateExplicit, callGeminiApiWithRetry);
+            // When P1 is done, they broadcast the options to P2.
+            MPLib.broadcastToRoom({ type: 'scene_options', payload: dynamicOptions });
+            startSceneSelection(dynamicOptions);
+        } catch (error) {
+            console.error("Error generating dynamic scene options:", error);
+            showError("Could not generate scene options. Please try starting a new date.");
+            // Fallback to static options on error
+            startSceneSelection(sceneFeatures);
+        } finally {
+            if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'none';
+        }
+    } else {
+        // Player 2 shows a simple waiting message, but not a modal.
+        uiContainer.innerHTML = `<div class="text-center p-8"><h2>Waiting for Player 1 to set the scene...</h2><p>The first date options will appear here shortly.</p></div>`;
+    }
 }
 
 function startSceneSelection(options) {
