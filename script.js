@@ -63,6 +63,15 @@ const toggleDebugPanelButton = document.getElementById('toggle-debug-panel');
 const debugPanelCloseButton = document.getElementById('debug-panel-close-btn');
 const debugLogsContainer = document.getElementById('debug-panel-logs');
 
+// --- Spinner Elements ---
+const spinnerModal = document.getElementById('spinner-modal');
+const spinnerTitle = document.getElementById('spinner-title');
+const spinnerWheel = document.getElementById('spinner-wheel');
+const spinnerPointer = document.getElementById('spinner-pointer');
+const nudgeButton = document.getElementById('nudge-button');
+const nudgesLeftDisplay = document.getElementById('nudges-left');
+const spinnerResult = document.getElementById('spinner-result');
+
 // --- Web Audio API Context ---
 let audioCtx = null;
 
@@ -84,6 +93,17 @@ const LOCAL_PROFILE_KEY = 'sparksync_userProfile';
 let pressTimer = null;
 let isLongPress = false;
 const longPressDuration = 750; // milliseconds
+
+// --- Spinner State ---
+let isSpinnerRunning = false;
+let spinnerAngle = 0;
+let spinnerVelocity = 0;
+let localNudgesLeft = 3;
+const FRICTION = 0.995;
+const MIN_SPINNER_VELOCITY = 0.002;
+const NUDGE_STRENGTH = 1.5;
+let lastSpinnerFrameTime = 0;
+let spinnerCompletionCallback = null;
 
 // --- Helper Functions ---
 
@@ -653,7 +673,6 @@ function checkForTurnCompletion() {
     const numberOfPlayers = roomConnections ? roomConnections.size + 1 : 1;
 
     if (numberOfPlayers !== 2 || !isDateActive) {
-        // This logic is only for 2-player dates.
         return;
     }
 
@@ -662,29 +681,25 @@ function checkForTurnCompletion() {
         return;
     }
 
-    console.log("All turns received. Checking if I am Player 1 to proceed.");
+    console.log("All turns received. Starting prize wheel and orchestrator call.");
+
+    // Both players start the prize spinner. The callback is null because this spinner
+    // will be hidden by the generateLocalTurn function when the next turn is ready.
+    startSpinner('prizes', null);
 
     if (amIPlayer1) {
         const myRoomId = MPLib.getLocalRoomId();
-        // In a 2p date, there's only one other connection.
         const partnerRoomId = roomConnections.keys().next().value;
-
         const playerA_actions = turnSubmissions.get(myRoomId);
         const playerB_actions = turnSubmissions.get(partnerRoomId);
 
         if (!playerA_actions || !playerB_actions) {
             showError("FATAL: Could not map submissions to players. Aborting turn.");
-            console.error("Submission mapping failed.", {
-                myRoomId,
-                partnerRoomId,
-                keys: Array.from(turnSubmissions.keys())
-            });
-            setLoading(false);
+            if (spinnerModal) spinnerModal.style.display = 'none'; // Hide spinner on error
             turnSubmissions.clear();
             return;
         }
 
-        console.log("I am Player 1. Initiating the next turn generation.");
         initiateTurnAsPlayer1({
             playerA_actions: playerA_actions,
             playerB_actions: playerB_actions,
@@ -741,11 +756,6 @@ async function initiateSinglePlayerTurn(turnData, history = []) {
  */
 async function initiateTurnAsPlayer1(turnData) {
     console.log("Player 1 is initiating the turn by calling the orchestrator...");
-    const loadingText = document.getElementById('loading-text');
-    if (loadingText) {
-        loadingText.textContent = 'Generating next turn... Please wait.';
-    }
-    setLoading(true, true); // Use simple spinner for this phase
 
     try {
         const orchestratorPrompt = constructPrompt('orchestrator', turnData);
@@ -1315,6 +1325,24 @@ function setLoading(loading, isFirstTurn = false) {
         loadingIndicator.style.display = 'none';
         if (loading) {
             // Reset and show the interstitial screen
+            const interstitialWheel = document.getElementById('interstitial-spinner-wheel');
+            if(interstitialWheel) {
+                 populateSpinner('prizes'); // This will populate the main wheel, need to adapt it
+                 // A quick adaptation:
+                 const prizes = geemsPrompts.prizeItems;
+                 const numSegments = prizes.length;
+                 const anglePerSegment = 360 / numSegments;
+                 const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+                 interstitialWheel.innerHTML = '';
+                 prizes.forEach((prize, index) => {
+                    const segment = document.createElement('div');
+                    segment.className = 'spinner-segment';
+                    segment.style.backgroundColor = colors[index % colors.length];
+                    segment.style.transform = `rotate(${index * anglePerSegment}deg)`;
+                    interstitialWheel.appendChild(segment);
+                 });
+            }
+
             interstitialSpinner.style.display = 'flex';
             interstitialReports.classList.add('hidden');
             interstitialContinueButton.disabled = true;
@@ -1742,6 +1770,163 @@ function handleRoomPeerLeft(peerId) {
     renderLobby();
 }
 
+// --- Spinner Mini-Game Functions ---
+
+function populateSpinner(mode) {
+    if (!spinnerWheel) return;
+    spinnerWheel.innerHTML = '';
+
+    const items = (mode === 'scenes') ? geemsPrompts.firstDateScenes : geemsPrompts.prizeItems;
+    const numSegments = items.length;
+    if (numSegments === 0) return;
+    const anglePerSegment = 360 / numSegments;
+
+    const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+
+    items.forEach((item, index) => {
+        const segment = document.createElement('div');
+        segment.className = 'spinner-segment';
+
+        const content = document.createElement('div');
+        content.className = 'segment-content';
+        content.textContent = item;
+
+        segment.style.backgroundColor = colors[index % colors.length];
+
+        const rotation = index * anglePerSegment;
+        segment.style.transform = `rotate(${rotation}deg)`;
+
+        content.style.transform = `rotate(${anglePerSegment / 2}deg) translate(30px) rotate(-90deg)`;
+
+        spinnerWheel.appendChild(segment);
+        segment.appendChild(content);
+    });
+}
+
+function startSpinner(mode, onComplete) {
+    console.log(`Starting spinner in ${mode} mode...`);
+    isSpinnerRunning = true;
+    spinnerCompletionCallback = onComplete;
+    isPrizeMode = (mode === 'prizes');
+
+    localNudgesLeft = 3;
+    spinnerAngle = 0; // Radians
+
+    if (spinnerModal) {
+        spinnerTitle.textContent = isPrizeMode ? 'Spin for a Prize!' : 'Spin for Your First Date!';
+        spinnerModal.style.display = 'flex';
+    }
+    if (spinnerWheel) spinnerWheel.style.transition = 'none';
+    if (nudgesLeftDisplay) nudgesLeftDisplay.textContent = localNudgesLeft;
+    if (nudgeButton) nudgeButton.disabled = false;
+    if (spinnerResult) spinnerResult.style.display = 'none';
+
+    populateSpinner(mode);
+
+    if (amIPlayer1) {
+        spinnerVelocity = 5 + Math.random() * 5; // Initial random spin
+        lastSpinnerFrameTime = performance.now();
+        requestAnimationFrame(runSpinnerAnimation);
+    } else {
+        lastSpinnerFrameTime = performance.now();
+        requestAnimationFrame(runSpinnerAnimation);
+    }
+
+    if (nudgeButton) nudgeButton.onclick = handleNudge;
+}
+
+function runSpinnerAnimation(currentTime) {
+    if (!isSpinnerRunning) return;
+
+    if (lastSpinnerFrameTime === 0) {
+        lastSpinnerFrameTime = currentTime;
+        requestAnimationFrame(runSpinnerAnimation);
+        return;
+    }
+
+    const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
+    lastSpinnerFrameTime = currentTime;
+
+    if (amIPlayer1) {
+        if (spinnerVelocity !== 0) {
+            spinnerVelocity *= Math.pow(FRICTION, deltaTime * 60);
+        }
+        spinnerAngle += spinnerVelocity * deltaTime;
+
+        if (Math.abs(spinnerVelocity) < MIN_SPINNER_VELOCITY) {
+            spinnerVelocity = 0;
+            isSpinnerRunning = false;
+
+            const items = isPrizeMode ? geemsPrompts.prizeItems : geemsPrompts.firstDateScenes;
+            const numSegments = items.length;
+            const anglePerSegment = 360 / numSegments;
+            const finalAngleDegrees = (spinnerAngle * 180 / Math.PI);
+            const pointerAngle = 270;
+            const normalizedAngle = (360 - (finalAngleDegrees % 360) + pointerAngle) % 360;
+            const winningSegmentIndex = Math.floor(normalizedAngle / anglePerSegment);
+            const result = items[winningSegmentIndex];
+
+            console.log(`Spinner stopped. Result: ${result}`);
+
+            const resultPayload = { result: result, finalAngle: spinnerAngle };
+            MPLib.broadcastToRoom({ type: 'spinner_result', payload: resultPayload });
+            endSpinner(result, spinnerAngle);
+            return;
+        }
+
+        MPLib.sendDirectToRoomPeer(currentPartnerId, {
+            type: 'spinner_state_update',
+            payload: { angle: spinnerAngle, velocity: spinnerVelocity }
+        });
+    }
+
+    if (spinnerWheel) {
+        spinnerWheel.style.transform = `rotate(${spinnerAngle}rad)`;
+    }
+
+    requestAnimationFrame(runSpinnerAnimation);
+}
+
+function handleNudge() {
+    if (localNudgesLeft > 0 && isSpinnerRunning) {
+        localNudgesLeft--;
+        if (nudgesLeftDisplay) nudgesLeftDisplay.textContent = localNudgesLeft;
+
+        if (amIPlayer1) {
+            spinnerVelocity += NUDGE_STRENGTH;
+        } else {
+            MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'spinner_nudge' });
+        }
+
+        if (localNudgesLeft === 0) {
+            if (nudgeButton) nudgeButton.disabled = true;
+        }
+    }
+}
+
+function endSpinner(result, finalAngle) {
+    isSpinnerRunning = false;
+    lastSpinnerFrameTime = 0;
+    if (nudgeButton) nudgeButton.disabled = true;
+
+    if (spinnerWheel) {
+        spinnerWheel.style.transition = 'transform 2s ease-out';
+        spinnerWheel.style.transform = `rotate(${finalAngle}rad)`;
+    }
+
+    if (spinnerResult) {
+        spinnerResult.textContent = isPrizeMode ? `You won: ${result}!` : `Destination: ${result}!`;
+        spinnerResult.style.display = 'block';
+    }
+
+    setTimeout(() => {
+        if (spinnerModal) spinnerModal.style.display = 'none';
+        if (spinnerCompletionCallback) {
+            spinnerCompletionCallback(result);
+        }
+    }, 4000);
+}
+
 function handleRoomDataReceived(senderId, data) {
     console.log(`MPLib Event: Room data received from ${senderId.slice(-6)}`, data);
     if (!data || !data.type) {
@@ -1773,6 +1958,25 @@ function handleRoomDataReceived(senderId, data) {
             if (button) {
                 button.disabled = false;
                 button.textContent = 'Propose Date';
+            }
+            break;
+
+        case 'spinner_state_update':
+            if (isSpinnerRunning && !amIPlayer1) {
+                const { angle, velocity } = data.payload;
+                spinnerAngle = angle;
+                spinnerVelocity = velocity;
+            }
+            break;
+        case 'spinner_nudge':
+            if (amIPlayer1 && isSpinnerRunning) {
+                spinnerVelocity += NUDGE_STRENGTH;
+            }
+            break;
+        case 'spinner_result':
+            if (isSpinnerRunning && !amIPlayer1) {
+                const { result, finalAngle } = data.payload;
+                endSpinner(result, finalAngle);
             }
             break;
 
@@ -2170,21 +2374,22 @@ function startNewDate(partnerId, iAmPlayer1) {
     const partnerName = partnerProfile?.name || `User-${partnerId.slice(-4)}`;
 
     // This will be replaced by the actual first turn UI from the AI
-    uiContainer.innerHTML = `<div class="text-center p-8"><h2>Date with ${partnerName} has started!</h2></div>`;
+    uiContainer.innerHTML = `<div class="text-center p-8"><h2>Date with ${partnerName} has started!</h2><p>Spinning for a destination...</p></div>`;
 
-    // Player 1 is responsible for fetching the first turn
-    if (iAmPlayer1) {
-        console.log("I am Player 1, fetching the first turn.");
-        fetchFirstTurn();
-    } else {
-        // Player 2 just waits, show a loading indicator.
-        uiContainer.innerHTML = `<div class="text-center p-8"><h2>Date with ${partnerName} has started! Waiting for first turn...</h2></div>`;
-        setLoading(true, true); // Use simple spinner
-    }
+    // Both players start the spinner minigame to decide the first scene.
+    // Player 1 will be responsible for fetching the turn after completion.
+    startSpinner('scenes', (winningScene) => {
+        if (amIPlayer1) {
+            fetchFirstTurn(winningScene);
+        } else {
+            // Player 2 just waits for the turn data to arrive.
+            setLoading(true, true);
+        }
+    });
 }
 
-async function fetchFirstTurn() {
-    console.log("Fetching first turn using the Orchestrator...");
+async function fetchFirstTurn(chosenScene = "A mysterious location") {
+    console.log(`Fetching first turn for scene: ${chosenScene}`);
     const loadingText = document.getElementById('loading-text');
     if (loadingText) {
         loadingText.textContent = 'Inventing a new scenario... Please wait.';
@@ -2201,8 +2406,8 @@ async function fetchFirstTurn() {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
         // The notes provide a clear starting point for the orchestrator AI.
-        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
-        playerB_notes: "## Dr. Gemini's Log\nThis is the very first turn of a new blind date. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.",
+        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The chosen location is: ${chosenScene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
+        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The chosen location is: ${chosenScene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
         isExplicit: isDateExplicit,
         // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
         isFirstTurn: true

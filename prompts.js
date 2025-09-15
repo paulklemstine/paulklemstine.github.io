@@ -120,5 +120,31 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 *   **Pornographic Imagery:** Image prompts must be hardcore and pornographic, tailored to the player's kinks. No more tasteful abstractions. Think sweat, saliva, and semen. Text overlays should be lewd and demanding.
 *   **Psychological Degradation:** Weaponize the player's psychological drivers. Your Psychosomatic Companions are now sex toys or depraved participants. Use them to humiliate, praise, or degrade the player based on their profile.
 *   **Safety Notice:** This is a fantasy scenario. While the content must be graphic and intense, it should not violate core safety policies around non-consensual violence or hate speech. The focus is on consensual, if dirty, exploration of fantasy.
-`
+`,
+
+    // --- Data for Spinner ---
+    firstDateScenes: [
+        "Axe-throwing bar",
+        "Fancy restaurant",
+        "Dive bar",
+        "Strip club",
+        "Public library",
+        "Bougie coffee shop",
+        "Picnic in a graveyard",
+        "Art gallery",
+        "Seedy motel room",
+        "Beach at sunset",
+        "High school reunion",
+        "Abandoned theme park"
+    ],
+    prizeItems: [
+        "Good Fortune",
+        "A Winning Smile",
+        "Mystery Box",
+        "A Single Red Rose",
+        "Secret Admirer",
+        "Cosmic High-Five",
+        "Pocket Full of Sunshine",
+        "A Moment of Clarity"
+    ]
 }
