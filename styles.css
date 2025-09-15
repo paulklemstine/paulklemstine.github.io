@@ -859,3 +859,30 @@ body {
     text-align: center;
     margin-right: 0.5rem;
 }
+
+/* --- Spinner Result Pop Animation --- */
+@keyframes result-pop {
+    0% {
+        transform: scale(0.9);
+        opacity: 0.8;
+    }
+    50% {
+        transform: scale(1.1);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.final-result-pop {
+    animation: result-pop 0.5s ease-out forwards;
+    font-size: 1.5rem; /* Larger font size */
+    padding: 1rem;
+    background-color: #eef2ff;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(79, 70, 229, 0.2);
+    border: 2px solid #818cf8;
+    margin-top: 1rem;
+}

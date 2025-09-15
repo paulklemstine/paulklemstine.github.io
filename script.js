@@ -3038,17 +3038,15 @@ function startSpinner(spinnersData, onComplete) {
 
 function endSpinner() {
     isSpinnerRunning = false;
-    // Ensure we get the text from the result object, and filter out any null/undefined results
     const finalResults = activeSpinners.map(s => s.result).filter(Boolean);
-
     console.log("All spinners stopped. Final results:", finalResults);
 
     if (finalResults.length === activeSpinners.length) {
         if (spinnerResult) {
+            spinnerResult.className = 'spinner-result'; // Reset classes
             spinnerResult.style.display = 'block';
-            spinnerResult.innerHTML = '...'; // Initial state
+            spinnerResult.innerHTML = '...';
 
-            // Reveal results one by one
             setTimeout(() => {
                 spinnerResult.innerHTML = `Location: <strong>${finalResults[0]}</strong>`;
             }, 500);
@@ -3059,24 +3057,24 @@ function endSpinner() {
 
             setTimeout(() => {
                 spinnerResult.innerHTML += `<br>Wildcard: <strong>${finalResults[2]}</strong>`;
+                spinnerResult.classList.add('final-result-pop'); // Add class for animation
             }, 2500);
         }
 
-        // Hide modal and fire callback after the full reveal
+        // Hide modal and fire callback after the full reveal, with a longer delay
         setTimeout(() => {
             if (spinnerModal) spinnerModal.style.display = 'none';
             if (spinnerCompletionCallback) {
                 spinnerCompletionCallback(finalResults);
             }
             activeSpinners = [];
-        }, 4500);
+        }, 6500); // Increased delay
     } else {
         console.error("Mismatch in spinner results. Aborting.");
-        // Even if there's a mismatch, try to close the modal gracefully
         setTimeout(() => {
             if (spinnerModal) spinnerModal.style.display = 'none';
             if (spinnerCompletionCallback) {
-                spinnerCompletionCallback([]); // Send empty array on error
+                spinnerCompletionCallback([]);
             }
             activeSpinners = [];
         }, 2000);
