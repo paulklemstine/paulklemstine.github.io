@@ -183,7 +183,7 @@ export async function getMinigameActions(isExplicit, llmApiCall) {
 
     const prompt = `You are a game designer creating a rock-paper-scissors style minigame about physical intimacy on a date. The theme is: ${theme}.
 
-You must generate a set of actions for an "Initiator" and a "Receiver".
+You must generate a set of actions for an "Initiator" and a "Receiver", and the rules that govern them.
 
 1.  **Actions:**
     *   Generate a list of 8 unique, creative actions for the 'initiator'.
@@ -195,12 +195,6 @@ You must generate a set of actions for an "Initiator" and a "Receiver".
     *   For each initiator action, define the outcome against each receiver action.
     *   The outcome can be 'initiator' (Initiator wins), 'receiver' (Receiver wins), or 'draw' (It's a tie).
     *   The logic should be creative and psychological. A bold move might beat a hesitant one, but a clever, defensive move could beat a bold one.
-
-3.  **Round Outcome Generation:**
-    *   Create a JSON object called 'outcomes' that provides flavorful text and an image prompt for each possible interaction.
-    *   For each initiator action, and for each receiver action nested within it, provide:
-        *   \`narrative\`: A short (1-2 sentence) story describing what happens.
-        *   \`image_prompt\`: A detailed Pollinations.ai prompt to visually represent the narrative. Use an anime style.
 
 **Output Format:**
 Return ONLY a single, valid JSON object. Do not include any other text or markdown.
@@ -216,30 +210,63 @@ The final JSON object MUST have this exact structure:
       ...
     },
     ...
-  },
-  "outcomes": {
-    "action_one": {
-      "response_one": {
-        "narrative": "The story of what happens.",
-        "image_prompt": "A pollations.ai prompt for the scene."
-      },
-      ...
-    },
-    ...
   }
 }
 `;
 
     try {
-        // Use a more powerful model for this complex generation
-        const responseJson = await llmApiCall(prompt, "application/json");
+        // Use a faster model for this less complex generation
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
         const gameData = JSON.parse(responseJson);
         // Add validation here if needed
-        console.log("Successfully fetched dynamic minigame actions:", gameData);
+        console.log("Successfully fetched dynamic minigame actions and rules:", gameData);
         return gameData;
     } catch (error) {
         console.error("Failed to get dynamic minigame actions from LLM:", error);
-        // In a real app, you'd have a hardcoded fallback here
+        return null;
+    }
+}
+
+/**
+ * Generates the narrative and image prompt for a specific minigame round outcome.
+ * @param {string} initiatorMove - The action the initiator took (e.g., "go_for_a_kiss").
+ * @param {string} receiverMove - The action the receiver took (e.g., "accept").
+ * @param {string} winner - The result of the round ('initiator', 'receiver', or 'draw').
+ * @param {boolean} isExplicit - Whether the theme is SFW or NSFW.
+ * @param {Function} llmApiCall - The function to call the Gemini API.
+ * @returns {Promise<object|null>} A promise that resolves to an object with {narrative, image_prompt} or null.
+ */
+export async function getMinigameRoundOutcome(initiatorMove, receiverMove, winner, isExplicit, llmApiCall) {
+     const theme = isExplicit
+        ? "a tense, intimate, and sexually charged moment between two people on a date"
+        : "a cute, slightly awkward, romantic moment between two people on a date";
+
+    const prompt = `You are a creative writer describing a moment in a date. The theme is: ${theme}.
+An "Initiator" took the action "${initiatorMove.replace(/_/g, ' ')}".
+A "Receiver" responded with the action "${receiverMove.replace(/_/g, ' ')}".
+The result of this interaction was a win for the: ${winner}.
+
+Based on this, generate a short narrative and an image prompt.
+
+**Output Format:**
+Return ONLY a single, valid JSON object with two keys: "narrative" and "image_prompt".
+- "narrative": A 1-2 sentence story describing what happens in this moment.
+- "image_prompt": A detailed Pollinations.ai prompt to visually represent the narrative. Use a "cinematic anime" style.
+
+Example:
+{
+  "narrative": "She leans in, and for a moment, the world stills. He meets her halfway, a soft touch that promises more.",
+  "image_prompt": "cinematic anime, close-up, a man and a woman about to kiss, tender, romantic, soft lighting, detailed hair and eyes"
+}
+`;
+
+    try {
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const outcomeData = JSON.parse(responseJson);
+        console.log("Successfully fetched round outcome:", outcomeData);
+        return outcomeData;
+    } catch (error) {
+        console.error("Failed to get minigame round outcome from LLM:", error);
         return null;
     }
 }
