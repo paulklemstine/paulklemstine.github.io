@@ -169,3 +169,77 @@ Example for a non-explicit theme:
         return sceneFeatures;
     }
 }
+
+/**
+ * Generates a set of actions and rules for the "Make a Move" minigame.
+ * @param {boolean} isExplicit - Whether the theme is SFW or NSFW.
+ * @param {Function} llmApiCall - The function to call the Gemini API.
+ * @returns {Promise<object>} A promise that resolves to the minigame data.
+ */
+export async function getMinigameActions(isExplicit, llmApiCall) {
+    const theme = isExplicit
+        ? "a tense, intimate, and sexually charged moment between two people on a date"
+        : "a cute, slightly awkward, romantic moment between two people on a date";
+
+    const prompt = `You are a game designer creating a rock-paper-scissors style minigame about physical intimacy on a date. The theme is: ${theme}.
+
+You must generate a set of actions for an "Initiator" and a "Receiver".
+
+1.  **Actions:**
+    *   Generate a list of 8 unique, creative actions for the 'initiator'.
+    *   Generate a list of 8 unique, creative actions for the 'receiver'.
+    *   Actions should be short phrases (2-4 words). Use snake_case for the values (e.g., "go_for_a_kiss").
+
+2.  **Ruleset:**
+    *   Create a JSON object called 'rules' that defines the outcome of every possible Initiator vs. Receiver action pair.
+    *   For each initiator action, define the outcome against each receiver action.
+    *   The outcome can be 'initiator' (Initiator wins), 'receiver' (Receiver wins), or 'draw' (It's a tie).
+    *   The logic should be creative and psychological. A bold move might beat a hesitant one, but a clever, defensive move could beat a bold one.
+
+3.  **Round Outcome Generation:**
+    *   Create a JSON object called 'outcomes' that provides flavorful text and an image prompt for each possible interaction.
+    *   For each initiator action, and for each receiver action nested within it, provide:
+        *   \`narrative\`: A short (1-2 sentence) story describing what happens.
+        *   \`image_prompt\`: A detailed Pollinations.ai prompt to visually represent the narrative. Use an anime style.
+
+**Output Format:**
+Return ONLY a single, valid JSON object. Do not include any other text or markdown.
+
+The final JSON object MUST have this exact structure:
+{
+  "initiator_actions": ["action_one", "action_two", ...],
+  "receiver_actions": ["response_one", "response_two", ...],
+  "rules": {
+    "action_one": {
+      "response_one": "initiator",
+      "response_two": "receiver",
+      ...
+    },
+    ...
+  },
+  "outcomes": {
+    "action_one": {
+      "response_one": {
+        "narrative": "The story of what happens.",
+        "image_prompt": "A pollations.ai prompt for the scene."
+      },
+      ...
+    },
+    ...
+  }
+}
+`;
+
+    try {
+        // Use a more powerful model for this complex generation
+        const responseJson = await llmApiCall(prompt, "application/json");
+        const gameData = JSON.parse(responseJson);
+        // Add validation here if needed
+        console.log("Successfully fetched dynamic minigame actions:", gameData);
+        return gameData;
+    } catch (error) {
+        console.error("Failed to get dynamic minigame actions from LLM:", error);
+        // In a real app, you'd have a hardcoded fallback here
+        return null;
+    }
+}
