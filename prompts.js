@@ -120,5 +120,11 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 *   **Pornographic Imagery:** Image prompts must be hardcore and pornographic, tailored to the player's kinks. No more tasteful abstractions. Think sweat, saliva, and semen. Text overlays should be lewd and demanding.
 *   **Psychological Degradation:** Weaponize the player's psychological drivers. Your Psychosomatic Companions are now sex toys or depraved participants. Use them to humiliate, praise, or degrade the player based on their profile.
 *   **Safety Notice:** This is a fantasy scenario. While the content must be graphic and intense, it should not violate core safety policies around non-consensual violence or hate speech. The focus is on consensual, if dirty, exploration of fantasy.
-`
+`,
+
 }
+
+export const sceneFeatures = {
+    locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
+    vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
+};
