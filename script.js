@@ -126,6 +126,8 @@ let isDateExplicit = false;
 let globalRoomDirectory = { rooms: {}, peers: {} }; // Holds the global state
 let currentRoomName = null; // The name of the room the user is currently in
 let currentRoomIsPublic = true; // Whether the current room is public or private
+let localPlayerAnalysis = null;
+let partnerPlayerAnalysis = null;
 
 const remoteGameStates = new Map(); // Map<peerId, gameState>
 const LOCAL_PROFILE_KEY = 'sparksync_userProfile';
@@ -235,9 +237,9 @@ ${notes}
 
             prompt += `\n\n---\nLATEST TURN DATA\n---\n`;
             prompt += `player_input_A: ${JSON.stringify(playerA_actions)}\n`;
-            prompt += `previous_notes_A: \`\`\`markdown\n${playerA_notes}\n\`\`\`\n\n`;
+            prompt += `previous_notes_A: ${JSON.stringify(playerA_notes)}\n\n`;
             prompt += `player_input_B: ${JSON.stringify(playerB_actions)}\n`;
-            prompt += `previous_notes_B: \`\`\`markdown\n${playerB_notes}\n\`\`\`\n`;
+            prompt += `previous_notes_B: ${JSON.stringify(playerB_notes)}\n`;
             prompt += activeAddendum;
             prompt += minigameAddendum;
             prompt += `\n--- Generate instructions for both players based on the above. ---`;
@@ -336,10 +338,13 @@ function updateLocalProfileFromTurn(actions) {
 
     // Extract the detailed psychological profile from the 'notes' field
     if (actions.notes) {
-        if (profile.personality.notes !== actions.notes) {
-            profile.personality.notes = actions.notes;
+        // actions.notes is a string from the hidden input, so we parse it.
+        const newNotesObject = JSON.parse(actions.notes);
+        // Compare stringified versions to detect changes in the object.
+        if (JSON.stringify(profile.personality.notes) !== JSON.stringify(newNotesObject)) {
+            profile.personality.notes = newNotesObject; // Store the actual object
             updated = true;
-            console.log("Updated personality notes.");
+            console.log("Updated personality notes object.");
         }
     }
 
@@ -561,6 +566,88 @@ function restoreLocalState() {
     }
 }
 
+/**
+ * Generates the Red/Green flags and Clinical Profile for the local player.
+ * @param {object} playerActions - The actions the player just took.
+ * @param {string} playerNotes - The player's notes from the previous turn.
+ * @param {Array} history - The full game history.
+ * @returns {Promise<object|null>} A promise that resolves to the analysis object or null on failure.
+ */
+async function generatePlayerAnalysis(playerActions, playerNotes, history) {
+    console.log("Generating player analysis...");
+    try {
+        let prompt = geemsPrompts.dr_gemini_analysis_prompt;
+
+        // Add history section if it exists
+        if (history && history.length > 0) {
+            const historyString = history.map((turn, index) => `Turn ${history.length - index} ago:\n- Player-Facing UI:\n\`\`\`json\n${turn.ui}\n\`\`\`\n- Player Actions Taken:\n\`\`\`json\n${turn.actions}\n\`\`\``).join('\n\n---\n\n');
+            prompt += `\n\n---\nCONTEXT: PLAYER'S LAST ${history.length} TURNS (Most recent first)\n---\n${historyString}`;
+        }
+
+        prompt += `\n\n---\nLATEST TURN DATA FOR THIS PLAYER\n---\n`;
+        prompt += `player_input: ${JSON.stringify(playerActions)}\n`;
+        prompt += `previous_notes: ${JSON.stringify(playerNotes)}\n`;
+        prompt += `\n--- Generate the analysis JSON based on the above. ---`;
+
+        const analysisJsonString = await callGeminiApiWithRetry(prompt);
+        const analysis = JSON.parse(analysisJsonString);
+        console.log("Successfully generated player analysis:", analysis);
+        return analysis;
+
+    } catch (error) {
+        console.error("Error during player analysis generation:", error);
+        showError("Failed to generate Dr. Gemini's analysis.");
+        return null;
+    }
+}
+
+
+/**
+ * Populates the interstitial screen with the analysis reports.
+ */
+function renderInterstitialReports() {
+    console.log("Rendering interstitial reports with received data.");
+    const localProfile = getLocalProfile();
+    const partnerMasterId = MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId;
+    const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile || { name: "Partner" };
+
+    // Set names
+    document.getElementById('local-player-name').textContent = localProfile.name || 'You';
+    document.getElementById('partner-player-name').textContent = partnerProfile.name || 'Your Partner';
+
+    // Populate the 'You' column
+    document.getElementById('local-green-flags').innerHTML = localPlayerAnalysis?.green_flags || '<em>Analysis pending...</em>';
+    document.getElementById('local-red-flags').innerHTML = localPlayerAnalysis?.red_flags || '<em>Analysis pending...</em>';
+    document.getElementById('local-clinical-report').innerHTML = (localPlayerAnalysis?.clinical_profile || '<em>Analysis pending...</em>').replace(/\\n/g, '<br>');
+
+    // Populate the 'Partner' column
+    // For the partner, we are displaying *their* green flags about *us*
+    document.getElementById('partner-green-flags').innerHTML = partnerPlayerAnalysis?.green_flags || '<em>Analysis pending...</em>';
+    document.getElementById('partner-red-flags').innerHTML = partnerPlayerAnalysis?.red_flags || '<em>Analysis pending...</em>';
+    document.getElementById('partner-clinical-report').innerHTML = (partnerPlayerAnalysis?.clinical_profile || '<em>Analysis pending...</em>').replace(/\\n/g, '<br>');
+
+    interstitialSpinner.style.display = 'none';
+    interstitialReports.classList.remove('hidden');
+}
+
+
+/**
+ * Checks if both local and partner analysis are ready, then renders them.
+ */
+function checkAndRenderInterstitial() {
+    if (localPlayerAnalysis && partnerPlayerAnalysis) {
+        console.log("Both local and partner analyses are ready. Rendering.");
+        const interstitialTitle = document.querySelector('#interstitial-screen h2');
+        if (interstitialTitle) interstitialTitle.textContent = "Dr. Gemini's Report";
+
+        renderInterstitialReports();
+        interstitialContinueButton.disabled = false;
+    } else {
+        console.log("Still waiting for all analysis data.", { hasLocal: !!localPlayerAnalysis, hasPartner: !!partnerPlayerAnalysis });
+        // Optionally update a status message here
+    }
+}
+
 
 /**
  * Generates the UI for the current player by calling the main UI generator prompt.
@@ -569,13 +656,7 @@ function restoreLocalState() {
  * @param {string} playerRole - Either 'player1' or 'player2'.
  */
 async function generateLocalTurn(orchestratorText, playerRole) {
-    console.log(`Generating local turn for ${playerRole}...`);
-
-    // Reset interstitial title for turn generation
-    const interstitialTitle = document.querySelector('#interstitial-screen h2');
-    if (interstitialTitle) interstitialTitle.textContent = 'Generating Turn...';
-
-    setLoading(true); // Show interstitial
+    console.log(`Generating local turn UI for ${playerRole}...`);
 
     try {
         const parts = orchestratorText.split('---|||---');
@@ -584,105 +665,32 @@ async function generateLocalTurn(orchestratorText, playerRole) {
         }
 
         const playerNumber = (playerRole === 'player1') ? 1 : 2;
-        const instructions = parts[playerNumber]; // 1 for P1, 2 for P2
+        const instructions = parts[playerNumber];
 
-        // Combine the master prompt with the turn-specific instructions from the orchestrator.
         const prompt = geemsPrompts.master_ui_prompt + "\n\n" + instructions;
         const uiJsonString = await callGeminiApiWithRetry(prompt);
         let uiJson = JSON.parse(uiJsonString);
 
-        // Defensively handle cases where the AI returns an object instead of an array
         if (!Array.isArray(uiJson) && typeof uiJson === 'object' && uiJson !== null) {
             const arrayKey = Object.keys(uiJson).find(key => Array.isArray(uiJson[key]));
             if (arrayKey) {
-                const potentialArray = uiJson[arrayKey];
                 console.warn(`API returned an object. Found an array at key: '${arrayKey}'`);
-
-                // Check if the elements in the array are malformed (missing 'type')
-                if (potentialArray.length > 0 && potentialArray[0].type === undefined) {
-                    console.warn(`Transforming malformed array elements to conform to UI schema.`);
-                    uiJson = potentialArray.map(action => ({
-                        type: 'radio',
-                        name: 'main_action',
-                        label: action.label || action.action_id || 'Action', // Use label, fallback to action_id
-                        value: action.description || 'No description available.',
-                        color: '#FFFFFF' // Default color
-                    }));
-                } else {
-                    uiJson = potentialArray; // The array seems to be in the correct format
-                }
+                uiJson = uiJson[arrayKey];
             }
         }
 
         currentUiJson = uiJson;
-
-        // --- Interstitial Logic ---
-        if (Array.isArray(uiJson) && isDateActive) { // Only show for dates
-            // Find all the report and flag elements
-            const pA_green = uiJson.find(el => el.name === 'playerA_green_flags');
-            const pA_red = uiJson.find(el => el.name === 'playerA_red_flags');
-            const pB_green = uiJson.find(el => el.name === 'playerB_green_flags');
-            const pB_red = uiJson.find(el => el.name === 'playerB_red_flags');
-            const ownReport = uiJson.find(el => el.name === 'own_clinical_analysis');
-            const partnerReport = uiJson.find(el => el.name === 'partner_clinical_analysis');
-
-            // Get player profiles
-            const localProfile = getLocalProfile();
-            const partnerMasterId = MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId;
-            const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile || { name: "Partner" };
-
-            // Determine which set of flags/reports belong to local vs partner
-            const localIsPlayerA = amIPlayer1;
-            const localFlags = {
-                green: localIsPlayerA ? pA_green : pB_green,
-                red: localIsPlayerA ? pA_red : pB_red,
-                report: ownReport
-            };
-            const partnerFlags = {
-                green: localIsPlayerA ? pB_green : pA_green,
-                red: localIsPlayerA ? pB_red : pA_red,
-                report: partnerReport
-            };
-
-            // Get the DOM elements for the new layout
-            document.getElementById('local-player-name').textContent = localProfile.name || 'You';
-            document.getElementById('partner-player-name').textContent = partnerProfile.name || 'Your Partner';
-
-            // Populate the 'You' column
-            document.getElementById('local-green-flags').innerHTML = (localFlags.green && localFlags.green.value) ? localFlags.green.value.replace(/\\n/g, '<br>') : '<em>No specific green flags noted.</em>';
-            document.getElementById('local-red-flags').innerHTML = (localFlags.red && localFlags.red.value) ? localFlags.red.value.replace(/\\n/g, '<br>') : '<em>No specific red flags noted.</em>';
-            document.getElementById('local-clinical-report').innerHTML = (localFlags.report && localFlags.report.value) ? localFlags.report.value.replace(/\\n/g, '<br>') : '<em>Clinical report not available.</em>';
-
-            // Populate the 'Partner' column
-            document.getElementById('partner-green-flags').innerHTML = (partnerFlags.green && partnerFlags.green.value) ? partnerFlags.green.value.replace(/\\n/g, '<br>') : '<em>No specific green flags noted.</em>';
-            document.getElementById('partner-red-flags').innerHTML = (partnerFlags.red && partnerFlags.red.value) ? partnerFlags.red.value.replace(/\\n/g, '<br>') : '<em>No specific red flags noted.</em>';
-            document.getElementById('partner-clinical-report').innerHTML = (partnerFlags.report && partnerFlags.report.value) ? partnerFlags.report.value.replace(/\\n/g, '<br>') : '<em>Clinical report not available.</em>';
-
-        } else {
-            console.warn("API response for UI is not an array or not in a date, skipping interstitial report generation.", uiJson);
-            // Clear all reports if the response is invalid
-            const reportIds = ['local-green-flags', 'local-red-flags', 'local-clinical-report', 'partner-green-flags', 'partner-red-flags', 'partner-clinical-report'];
-            reportIds.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.innerHTML = '<em>Could not parse analysis.</em>';
-            });
-        }
-
-
-        interstitialSpinner.style.display = 'none';
-        interstitialReports.classList.remove('hidden');
-        interstitialContinueButton.disabled = false;
-        // --- End Interstitial Logic ---
-
         renderUI(currentUiJson);
         playTurnAlertSound();
+        console.log(`Finished generating UI for ${playerRole}.`);
+        return true; // Indicate success
 
     } catch (error) {
         console.error(`Error during local turn generation for ${playerRole}:`, error);
-        showError("Failed to generate your turn. Please try again.");
+        showError("Failed to generate your turn's UI. Please try again.");
         interstitialScreen.style.display = 'none';
-    } finally {
-        setLoading(false);
+        setLoading(false); // Make sure user is not stuck on error
+        return false; // Indicate failure
     }
 }
 
@@ -774,8 +782,8 @@ function checkForTurnCompletion() {
         initiateTurnAsPlayer1({
             playerA_actions: playerA_actions,
             playerB_actions: playerB_actions,
-            playerA_notes: playerA_actions.notes,
-            playerB_notes: playerB_actions.notes,
+            playerA_notes: JSON.parse(playerA_actions.notes || '{}'),
+            playerB_notes: JSON.parse(playerB_actions.notes || '{}'),
             isExplicit: isDateExplicit,
             history: historyQueue,
             minigameWinner: winner
@@ -792,73 +800,78 @@ function checkForTurnCompletion() {
 
 async function initiateSinglePlayerTurn(turnData, history = []) {
     console.log("Initiating single-player turn...");
-    setLoading(true, true);
+    setLoading(true); // Show interstitial for single player too
 
     try {
-        // In single player, we can treat the player as both Player A and Player B.
-        // The orchestrator is designed for two sets of inputs, so we provide the same for both.
+        const parsedNotes = JSON.parse(turnData.notes || '{}');
         const orchestratorTurnData = {
-            playerA_actions: turnData,
-            playerB_actions: turnData,
-            playerA_notes: turnData.notes,
-            playerB_notes: turnData.notes,
-            isExplicit: isExplicitMode,
-            history: history
+            playerA_actions: turnData, playerB_actions: turnData,
+            playerA_notes: parsedNotes, playerB_notes: parsedNotes,
+            isExplicit: isExplicitMode, history: history
         };
 
         const orchestratorPrompt = constructPrompt('orchestrator', orchestratorTurnData);
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
-        currentOrchestratorText = orchestratorText; // Capture the orchestrator output
+        currentOrchestratorText = orchestratorText;
 
-        // We only care about Player A's output for the single player.
-        await generateLocalTurn(orchestratorText, 'player1');
+        // In single player, we run UI and analysis generation sequentially.
+        const uiSuccess = await generateLocalTurn(orchestratorText, 'player1');
+        if (!uiSuccess) throw new Error("UI generation failed.");
+
+        const analysis = await generatePlayerAnalysis(turnData, parsedNotes, history);
+
+        // For single player, both reports are the same.
+        localPlayerAnalysis = analysis;
+        partnerPlayerAnalysis = analysis; // Show the same report in both columns
+        checkAndRenderInterstitial();
 
     } catch (error) {
         console.error("Error during single-player turn generation:", error);
-        let userMessage = "Failed to generate the next turn. Please try again.";
-        if (error.message && error.message.includes('503')) {
-            userMessage = "The AI is currently overloaded. Please wait a moment and resubmit your turn.";
-        }
-        showError(userMessage);
+        showError("Failed to generate the next turn. Please try again.");
+        interstitialScreen.style.display = 'none';
         setLoading(false);
     }
 }
 
 /**
  * Kicks off the turn generation process. Called only by Player 1.
- * This function makes the 'orchestrator' call and distributes the plain text plan.
+ * This function makes the 'orchestrator' call and distributes the plan.
  */
 async function initiateTurnAsPlayer1(turnData) {
-    console.log("Player 1 is initiating the turn by calling the orchestrator...");
+    console.log("Player 1 is initiating the turn...");
+    setLoading(true); // Show interstitial screen
 
     try {
         const orchestratorPrompt = constructPrompt('orchestrator', turnData);
-        // The orchestrator now returns a single plain text block
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
-        currentOrchestratorText = orchestratorText; // Capture the orchestrator output
+        currentOrchestratorText = orchestratorText;
 
-        // Send the entire text block to Player 2
+        // Immediately send the plan to Player 2
         MPLib.sendDirectToRoomPeer(currentPartnerId, {
             type: 'orchestrator_output',
-            payload: orchestratorText
+            payload: { orchestratorText, turnData: turnData } // Send turnData for P2's analysis call
         });
 
-        // Player 1 generates their own turn locally from the text block
-        await generateLocalTurn(orchestratorText, 'player1');
+        // Player 1 starts their own parallel generation
+        const [uiResult, analysisResult] = await Promise.all([
+            generateLocalTurn(orchestratorText, 'player1'),
+            generatePlayerAnalysis(turnData.playerA_actions, turnData.playerA_notes, historyQueue)
+        ]);
+
+        if (!uiResult || !analysisResult) {
+            throw new Error("One of the generation promises failed for Player 1.");
+        }
+
+        localPlayerAnalysis = analysisResult;
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
+        checkAndRenderInterstitial();
 
     } catch (error) {
-        console.error("Error during orchestrator call:", error);
-        let userMessage = "Failed to get turn instructions from AI. Please try again.";
-        if (error.message && error.message.includes('503')) {
-            userMessage = "The AI is currently overloaded. Please wait a moment and resubmit your turn.";
-            // Notify Player 2
-            MPLib.sendDirectToRoomPeer(currentPartnerId, {
-                type: 'llm_overloaded',
-                payload: {}
-            });
-        }
-        showError(userMessage);
-        setLoading(false); // Hide spinner on error
+        console.error("Error during Player 1's turn initiation:", error);
+        showError("Failed to start the next turn due to an AI error.");
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'llm_overloaded' });
+        interstitialScreen.style.display = 'none';
+        setLoading(false);
     }
 }
 
@@ -2180,12 +2193,38 @@ function handleRoomDataReceived(senderId, data) {
             }
             break;
         case 'orchestrator_output':
-            console.log(`Received orchestrator output from ${senderId}`);
-            currentOrchestratorText = data.payload; // Capture the orchestrator output
+            console.log(`Received orchestrator output from ${senderId.slice(-6)}`);
             if (isDateActive && !amIPlayer1) {
-                generateLocalTurn(data.payload, 'player2');
+                const { orchestratorText, turnData } = data.payload;
+                currentOrchestratorText = orchestratorText;
+
+                // Player 2 starts their own parallel generation
+                Promise.all([
+                    generateLocalTurn(orchestratorText, 'player2'),
+                    generatePlayerAnalysis(turnData.playerB_actions, turnData.playerB_notes, historyQueue)
+                ]).then(([uiResult, analysisResult]) => {
+                    if (!uiResult || !analysisResult) {
+                        throw new Error("One of the generation promises failed for Player 2.");
+                    }
+                    localPlayerAnalysis = analysisResult;
+                    // Send our analysis back to Player 1
+                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
+                    checkAndRenderInterstitial();
+                }).catch(error => {
+                     console.error("Error during Player 2's turn generation:", error);
+                     showError("Failed to generate your turn due to an AI error.");
+                     interstitialScreen.style.display = 'none';
+                     setLoading(false);
+                });
             }
             break;
+
+        case 'analysis_swap':
+            console.log(`Received analysis swap from partner ${senderId.slice(-6)}`);
+            partnerPlayerAnalysis = data.payload;
+            checkAndRenderInterstitial();
+            break;
+
         case 'profile_update':
             console.log(`Received profile update from ${senderId.slice(-6)}`, data.payload);
             // Use the Master ID for storage to keep it consistent
@@ -2742,9 +2781,9 @@ async function fetchFirstTurn(minigameWinner, scene) {
     const initialTurnData = {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
-        // The notes provide a clear starting point for the orchestrator AI.
-        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
-        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
+        // For the first turn, the notes are just placeholder objects. The orchestrator will create the real ones.
+        playerA_notes: { summary: `New subject (Player 1) starting date in scene: ${scene}.` },
+        playerB_notes: { summary: `New subject (Player 2) starting date in scene: ${scene}.` },
         isExplicit: isDateExplicit,
         minigameWinner: minigameWinner, // This will be null, but we pass it anyway
         // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
@@ -2866,6 +2905,11 @@ function initializeGame() {
     interstitialContinueButton.addEventListener('click', () => {
         interstitialScreen.style.display = 'none';
         window.scrollTo(0, 0); // Scroll to top
+
+        // Reset state for the next turn
+        localPlayerAnalysis = null;
+        partnerPlayerAnalysis = null;
+        setLoading(false); // Re-enable controls now that the user has seen the reports
     });
 
     // Hide the game wrapper and show the lobby selection by default
