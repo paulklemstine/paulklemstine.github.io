@@ -127,4 +127,45 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 export const sceneFeatures = {
     locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
     vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
+    wildcards: ["a sudden downpour", "a shared, unusual dessert", "a street performer interrupts", "a power outage", "an old photograph is found", "a cryptic note is passed"]
 };
+
+/**
+ * Uses a quick flash LLM call to generate dynamic scene-setting options.
+ * @param {boolean} isExplicit - Whether to generate SFW or NSFW options.
+ * @param {Function} llmApiCall - The function to call the Gemini API.
+ * @returns {Promise<{locations: string[], vibes: string[], wildcards: string[]}>} A promise that resolves to an object containing arrays of options.
+ */
+export async function getDynamicSceneOptions(isExplicit, llmApiCall) {
+    const theme = isExplicit
+        ? "sexy, risque, and adult-themed"
+        : "creative, interesting, and evocative";
+
+    const prompt = `You are a creative writing assistant. Brainstorm options for a first date scenario. The theme is: ${theme}.
+Generate 5 options for each of the following categories: 'locations', 'vibes', and 'wildcards'.
+The options should be brief (2-5 words).
+Return ONLY a single, valid JSON object with three keys: "locations", "vibes", and "wildcards". Each key should have an array of 5 strings as its value.
+Example for a non-explicit theme:
+{
+  "locations": ["an abandoned observatory", "a rooftop garden at night", "a secret jazz club", "a vintage train car", "a foggy pier"],
+  "vibes": ["nostalgic", "surreal", "electrifying", "intimate", "suspenseful"],
+  "wildcards": ["a shared memory is triggered", "a mysterious benefactor pays the bill", "the music changes perfectly", "a strange coincidence is revealed", "a blackout"]
+}`;
+
+    try {
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const options = JSON.parse(responseJson);
+        // Basic validation to ensure the response is in the correct format
+        if (options && Array.isArray(options.locations) && Array.isArray(options.vibes) && Array.isArray(options.wildcards)) {
+            console.log("Successfully fetched dynamic scene options:", options);
+            return options;
+        }
+        console.warn("Dynamic scene options response was not in the expected format:", options);
+        // Fallback to static features if validation fails
+        return sceneFeatures;
+    } catch (error) {
+        console.error("Failed to get dynamic scene options from LLM:", error);
+        // Fallback to static features on error
+        return sceneFeatures;
+    }
+}
