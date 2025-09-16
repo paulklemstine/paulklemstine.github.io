@@ -2640,7 +2640,7 @@ async function startNewDate(partnerId, iAmPlayer1) {
     isDateActive = true;
     currentPartnerId = partnerId;
     amIPlayer1 = iAmPlayer1;
-    turnSubmissions.clear();
+    turnPackages.clear();
     sceneSelections.clear();
 
     // Hide lobby, show game
