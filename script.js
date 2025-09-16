@@ -40,12 +40,13 @@ let minigameActionData = null; // To hold LLM-generated actions and rules
 let preloadedMinigameData = null; // To preload the *next* turn's actions
 
 // --- Model Switching State ---
-const AVAILABLE_MODELS = [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-
+const MODELS = [
+    { name: "gemini-2.5-pro", rpm: 5, tpm: 250000, rpd: 100, status: 'ok', lastRateLimitTime: 0, dailyRequestCount: 0, lastRpdResetTime: 0, requestTimestamps: [], tokenUsage: [] },
+    { name: "gemini-2.5-flash", rpm: 10, tpm: 250000, rpd: 250, status: 'ok', lastRateLimitTime: 0, dailyRequestCount: 0, lastRpdResetTime: 0, requestTimestamps: [], tokenUsage: [] },
+    { name: "gemini-2.5-flash-lite", rpm: 15, tpm: 250000, rpd: 1000, status: 'ok', lastRateLimitTime: 0, dailyRequestCount: 0, lastRpdResetTime: 0, requestTimestamps: [], tokenUsage: [] },
+    { name: "gemini-2.0-flash", rpm: 15, tpm: 1000000, rpd: 200, status: 'ok', lastRateLimitTime: 0, dailyRequestCount: 0, lastRpdResetTime: 0, requestTimestamps: [], tokenUsage: [] },
+    { name: "gemini-2.0-flash-lite", rpm: 30, tpm: 1000000, rpd: 200, status: 'ok', lastRateLimitTime: 0, dailyRequestCount: 0, lastRpdResetTime: 0, requestTimestamps: [], tokenUsage: [] }
 ];
-let currentModelIndex = 0;
 
 // --- Configuration ---
 const MIN_CONTRAST_LIGHTNESS = 0.55;
@@ -73,7 +74,6 @@ const submitButton = document.getElementById('submit-turn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const errorDisplay = document.getElementById('error-display');
 const modeToggleButton = document.getElementById('modeToggleButton');
-const modelToggleButton = document.getElementById('model-toggle-button');
 const resetGameButton = document.getElementById('resetGameButton');
 const clipboardMessage = document.getElementById('clipboardMessage');
 // Assume footer exists, get reference to it
@@ -265,8 +265,7 @@ function autoSaveGameState() {
             encodedApiKey: encodeApiKey(rawApiKey),
             currentUiJson: currentUiJson,
             historyQueue: historyQueue,
-            isExplicitMode: isExplicitMode,
-            currentModelIndex: currentModelIndex
+            isExplicitMode: isExplicitMode
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
         console.log("Game state auto-saved.");
@@ -864,10 +863,74 @@ async function initiateTurnAsPlayer1(turnData) {
 
 
 
+function selectOptimalModel(quality = 'high') {
+    const now = Date.now();
+
+    let startIndex = 0;
+    if (quality === 'low') {
+        const lowQualityModelIndex = MODELS.findIndex(m => m.name === 'gemini-2.5-flash-lite');
+        if (lowQualityModelIndex !== -1) {
+            startIndex = lowQualityModelIndex;
+        }
+    }
+
+    for (let i = startIndex; i < MODELS.length; i++) {
+        const model = MODELS[i];
+        // 1. RPD check
+        const aDayInMs = 24 * 60 * 60 * 1000;
+        if (now - model.lastRpdResetTime > aDayInMs) {
+            model.dailyRequestCount = 0;
+            model.lastRpdResetTime = now;
+        }
+        if (model.dailyRequestCount >= model.rpd) {
+            console.warn(`Model ${model.name} has reached its daily request limit.`);
+            continue; // Skip to the next model
+        }
+
+        // 2. Status check (for models that were previously rate limited)
+        if (model.status === 'rate_limited') {
+            const cooldown = 60 * 1000; // 60 seconds
+            if (now - model.lastRateLimitTime > cooldown) {
+                console.log(`Model ${model.name} cooldown period has passed. Resetting status to 'ok'.`);
+                model.status = 'ok';
+                model.lastRateLimitTime = 0;
+            } else {
+                continue; // Still in cooldown
+            }
+        }
+
+        // 3. RPM check
+        model.requestTimestamps = model.requestTimestamps.filter(ts => now - ts < 60000);
+        if (model.requestTimestamps.length >= model.rpm) {
+            console.warn(`Model ${model.name} is exceeding RPM limit. Marking as rate-limited.`);
+            model.status = 'rate_limited';
+            model.lastRateLimitTime = now;
+            continue;
+        }
+
+        // 4. TPM check
+        model.tokenUsage = model.tokenUsage.filter(tu => now - tu.timestamp < 60000);
+        const currentTpm = model.tokenUsage.reduce((sum, tu) => sum + tu.tokens, 0);
+        if (currentTpm >= model.tpm) {
+            console.warn(`Model ${model.name} is exceeding TPM limit. Marking as rate-limited.`);
+            model.status = 'rate_limited';
+            model.lastRateLimitTime = now;
+            continue;
+        }
+
+        // If we reach here, the model is available
+        console.log(`Selected model: ${model.name}`);
+        return model;
+    }
+
+    // If no model is available
+    throw new Error("All models are currently rate-limited. Please try again later.");
+}
+
 /**
  * A wrapper for the Gemini API call that includes retry logic and primary key fallback.
  */
-async function callGeminiApiWithRetry(prompt, responseMimeType = "application/json") {
+async function callGeminiApiWithRetry(prompt, responseMimeType = "application/json", quality = 'high') {
     // On each call, determine which API key to use.
     let apiKey = getPrimaryApiKey(); // Tries the default key first.
     if (!apiKey) {
@@ -881,30 +944,40 @@ async function callGeminiApiWithRetry(prompt, responseMimeType = "application/js
         throw new Error("API Key is missing.");
     }
 
-    let success = false;
     let attempts = 0;
-    const maxAttempts = 3; // Retries for network errors, etc.
-    let lastError = null;
+    const maxAttempts = MODELS.length + 2; // Allow falling back through all models plus a couple retries for other errors
 
-    while (!success && attempts < maxAttempts) {
+    while (attempts < maxAttempts) {
         attempts++;
-        const currentModel = AVAILABLE_MODELS[currentModelIndex];
-        console.log(`Attempt ${attempts}/${maxAttempts}: Trying model ${currentModel}`);
+        let model;
         try {
-            const responseText = await callRealGeminiAPI(apiKey, prompt, currentModel, responseMimeType);
-            // If the call succeeds, we return the text.
-            return responseText;
+            model = selectOptimalModel(quality);
+            console.log(`Attempt ${attempts}/${maxAttempts}: Trying model ${model.name}`);
+            const responseText = await callRealGeminiAPI(apiKey, prompt, model.name, responseMimeType);
+            return responseText; // Success
 
         } catch (error) {
-            console.error(`Error with model ${currentModel} (Attempt ${attempts}):`, error);
-            lastError = error;
+            console.error(`Error with model ${model?.name || 'N/A'} (Attempt ${attempts}):`, error);
 
+            if (error.message.includes("All models are currently rate-limited")) {
+                showError(error.message);
+                throw error; // No point in retrying if all are limited
+            }
+
+            // If the error is a rate limit error (429), mark the model and retry immediately
+            if (model && error.message && error.message.includes('429')) {
+                 console.warn(`Rate limit error with ${model.name}. Marking as rate-limited and retrying.`);
+                 model.status = 'rate_limited';
+                 model.lastRateLimitTime = Date.now();
+                 // Don't wait, just loop again to select the next best model
+                 continue;
+            }
+
+            // Handle other errors (503, primary key failure, network errors)
             if (error.message && error.message.includes('503')) {
                 throw new Error("LLM service is currently overloaded (503). Please try again shortly.");
             }
-
-            // Specifically check for a quota error (429) or invalid key error (400) and if it was the primary key that failed.
-            if (error.message && (error.message.includes('429') || error.message.includes('API_KEY_INVALID'))) {
+            if (error.message && error.message.includes('API_KEY_INVALID')) {
                 const primaryKey = getPrimaryApiKey();
                 if (primaryKey && apiKey === primaryKey) {
                     console.warn("Primary API key has failed (invalid or quota). Switching to user input.");
@@ -929,16 +1002,16 @@ async function callGeminiApiWithRetry(prompt, responseMimeType = "application/js
                 }
             }
 
-            // For any other kind of error, we can retry a few times.
+            // For other errors, wait before retrying
             if (attempts < maxAttempts) {
                 showError(`AI Error (Attempt ${attempts}). Retrying...`);
                 await new Promise(resolve => setTimeout(resolve, 1000));
+            } else {
+                 throw new Error(`Failed to get valid response from AI after ${maxAttempts} attempts. Last error: ${error?.message}`);
             }
         }
     }
-
-    // If the loop finishes without success, throw the last error.
-    throw new Error(`Failed to get valid response from AI after ${maxAttempts} attempts. Last error: ${lastError?.message}`);
+    throw new Error(`Failed to get valid response from AI after ${maxAttempts} attempts.`);
 }
 
 /** Calls the real Google AI (Gemini) API and logs the interaction for the debug panel. */
@@ -993,6 +1066,17 @@ async function callRealGeminiAPI(apiKey, promptText, modelName, responseMimeType
         const responseData = await response.json();
         logEntry.response = responseData; // Log success response
         console.log("--- LLM Response ---", responseData);
+
+        // Find the model used and update its usage stats
+        const model = MODELS.find(m => m.name === modelName);
+        if (model) {
+            const now = Date.now();
+            model.requestTimestamps.push(now);
+            model.dailyRequestCount++;
+            if (responseData.usageMetadata && responseData.usageMetadata.totalTokenCount) {
+                model.tokenUsage.push({ timestamp: now, tokens: responseData.usageMetadata.totalTokenCount });
+            }
+        }
 
         if (responseData.promptFeedback && responseData.promptFeedback.blockReason) {
             throw new Error(`Request blocked by API. Reason: ${responseData.promptFeedback.blockReason}. Details: ${JSON.stringify(responseData.promptFeedback.safetyRatings || 'N/A')}`);
@@ -1513,23 +1597,6 @@ function updateModeButtonVisuals() {
         modeToggleButton.textContent = '18+ Mode: Off';
         modeToggleButton.classList.add('standard-mode');
     }
-}
-
-function updateModelToggleVisuals() {
-    if (!modelToggleButton) return;
-    // Index 0 is Pro (Quality), Index 1 is Flash (Speed)
-    if (currentModelIndex === 0) {
-        modelToggleButton.textContent = 'Mode: Quality';
-    } else {
-        modelToggleButton.textContent = 'Mode: Speed';
-    }
-}
-
-function toggleModel() {
-    currentModelIndex = (currentModelIndex + 1) % AVAILABLE_MODELS.length;
-    console.log(`Model switched to: ${AVAILABLE_MODELS[currentModelIndex]}`);
-    updateModelToggleVisuals();
-    autoSaveGameState();
 }
 
 // --- Multiplayer Functions ---
@@ -2359,12 +2426,6 @@ modeToggleButton.addEventListener('click', () => {
     autoSaveGameState();
 });
 
-if (modelToggleButton) {
-    modelToggleButton.addEventListener('click', () => {
-        if (isLoading) return;
-        toggleModel();
-    });
-}
 
 resetGameButton.addEventListener('click', () => {
     if (isLoading || resetGameButton.disabled) return;
@@ -2836,7 +2897,6 @@ function loadGameStateFromStorage() {
             currentUiJson = savedState.currentUiJson || null;
             historyQueue = savedState.historyQueue || [];
             isExplicitMode = savedState.isExplicitMode || false;
-            currentModelIndex = savedState.currentModelIndex || 0;
 
             console.log("Game state loaded from localStorage.");
 
@@ -2849,7 +2909,6 @@ function loadGameStateFromStorage() {
                  if(gameWrapper) gameWrapper.style.display = 'block';
             }
             updateModeButtonVisuals();
-            updateModelToggleVisuals();
 
         } catch (error) {
             console.error("Error loading game state from localStorage:", error);
