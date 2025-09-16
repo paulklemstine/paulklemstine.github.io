@@ -61,55 +61,36 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
 //     - **Initial Notes:** For each player, you MUST include the complete, updated 'notes' markdown. Use the template provided in the main orchestrator prompt to initialize the notes for the first time. Fill in the 'subjectId' and other relevant fields based on the scene you've invented.
 `,
 
-    // The orchestrator is now simpler. It just provides the turn-specific instructions
-    // which will be appended to the master_ui_prompt.
-    orchestrator: `// Flagged Director AI (Text-Only Output)
-// YOUR DIRECTIVE: You are the Director, a cold, logical Analyst. Your goal is to process the previous turn's data and generate a complete, structured set of instructions for Dr. Gemini (the UI generation AI).
-// You will follow a strict, internal, two-step cognitive process.
-// Your output MUST be a single block of plain text, with no JSON or markdown formatting. It must contain exactly three sections, separated by a specific delimiter '---|||---'.
+    // The orchestrator is now a Director that consumes pre-analyzed data.
+    orchestrator: `// Flagged Director AI v2.0 (Text-Only Output)
+// YOUR DIRECTIVE: You are the Director. Your goal is to process the previous turn's data, including pre-computed analysis reports, and generate a complete set of instructions for Dr. Gemini (the UI generation AI).
+// Your output MUST be a single block of plain text with no JSON or markdown. It must contain exactly three sections, separated by '---|||---'.
 
-// ### STEP 1: ANALYSIS & STATE UPDATE (INTERNAL MONOLOGUE) ###
-// - **Review History:** A section titled 'CONTEXT: LAST X TURNS' may be provided. This contains the UI and player actions from previous turns. Use this information to understand the narrative arc, maintain consistency, and avoid repeating plot points.
-// - **Analyze Inputs:** Logically process previous_notes_A, player_input_A, previous_notes_B, and player_input_B from the 'LATEST TURN DATA' section.
-// - **Update State:** Internally, you must update the 'notes' markdown for both players. This includes updating the Player Profile, Psychological Analysis, and, most importantly, the ProbeHistory.
-// - **CRITICAL ANTI-REPETITION:** Identify the names of the probes each player just answered. You MUST append these names to the correct arrays in that player's PsychAnalysis.ProbeHistory. This is a non-negotiable rule to prevent boring, repetitive questions.
-// - **Formulate Strategy:** Based on the analysis, decide on the shared narrative and the specific goals for the next turn for each player.
+// ### INPUT DATA ###
+// You will receive the following for the last turn:
+// - **History:** Context from previous turns.
+// - **Player Inputs:** The JSON actions each player took.
+// - **Pre-Computed Analysis:** For each player, you will get a JSON object containing their 'green_flags', 'red_flags', and 'clinical_report'. The 'clinical_report' is the complete, updated notes file for that player for the NEXT turn.
 
-// ### STEP 2: GENERATE INSTRUCTIONS FOR DR. GEMINI ###
-// Based on your analysis, generate the instruction set.
-
-// 1.  **Create Shared Narrative:** Based on the combined actions, decide on the next story beat. This will be the shared information.
-// 2.  **Create Player-Specific Instructions:** For each player, write a detailed set of instructions for Dr. Gemini. This instruction string IS THE ONLY THING Dr. Gemini will see besides its master prompt. It MUST contain everything needed to generate the turn, including:
-//     - A clear creative directive and narrative focus for the turn.
-//     - **MANDATORY PROBE VARIETY:** A directive for Dr. Gemini to generate a rich set of interactive probes. You MUST instruct it to generate the following, using the anti-repetition history to ensure variety:
-//         - 1. \`main_action\` (MANDATORY): A \`radio\` group for the core narrative choice.
-//         - 2. Mental Deep Probe (MANDATORY): A probe targeting the player's \`NextProbeFocus\`. This MUST be a \`slider\` or \`checkbox\`.
-//         - 3. Mental Breadth Probe (MANDATORY): A creative, unexpected \`radio\` group probe to discover new personality facets.
-//         - 4. Physical Probe (CONDITIONAL): If the player's \`PhysicalDescription\` has "Unknown" values, add a \`radio\` or \`text_input\` probe to discover one.
-//     - The complete, updated 'notes' markdown for that player (which you updated in Step 1).
-//     - **CRITICAL ANTI-REPETITION:** A reminder to Dr. Gemini to not use any probe whose name appears in the updated ProbeHistory.
-//     - **CRITICAL ANALYSIS GENERATION:** A directive for Dr. Gemini to generate SIX hidden text fields for the interstitial screen. You will provide the content for all of these fields.
-//         - \`playerA_green_flags\`: A positive, supportive analysis of Player A's actions this turn.
-//         - \`playerA_red_flags\`: A critical, concerned, or suspicious analysis of Player A's actions this turn.
-//         - \`playerB_green_flags\`: A positive, supportive analysis of Player B's actions this turn.
-//         - \`playerB_red_flags\`: A critical, concerned, or suspicious analysis of Player B's actions this turn.
-//         - \`own_clinical_analysis\`: The full clinical report for the player receiving the turn.
-//         - \`partner_clinical_analysis\`: The full clinical report for the player's partner.
-//     - To accomplish this, you MUST generate and include the content for all four flag reports AND the full, updated clinical analysis reports for BOTH players within these instructions. This content will be used by Dr. Gemini as the 'value' for the corresponding hidden fields.
-//     - The clinical analysis reports you generate MUST follow the mandatory multi-line text structure below, including all headers and using markdown for formatting. This is not optional. The final output must be a single string with literal '\\n' characters for line breaks.
-
-// ### MANDATORY CLINICAL REPORT STRUCTURE ###
-// (The report you generate MUST follow this exact structure)
-// GEEMS Clinical Report: T[Turn Number] - Cumulative\\nSubject ID: [subjectId]\\n\\n1. Confirmed Diagnoses (DSM-5-TR Axis):\\n* [Diagnosis]\\n    * Evidence: [Actions across turns]\\n    * Analysis: [Clinical interpretation]\\n\\n2. Potential / Rule-Out Diagnoses:\\n* [Diagnosis]\\n    * Evidence: [Subtle actions]\\n    * Analysis: [Reasoning for consideration]\\n\\n3. Deviance, Kink, and Fetish Profile:\\n* [Kink/Fetish]\\n    * Evidence: [Specific choices]\\n    * Analysis: [Psychological driver]\\n\\n4. Behavioral and Cognitive Analysis:\\n* Physical Profile Status: [Summary of known attributes]\\n* Breadth Search Findings: [Analysis of this turn's wide-net probe choice]\\n* Deep Probe Results: [Analysis of this turn's targeted deep probe result]\\n\\n5. Dr. Gemini's Commentary & Strategic Plan Summary:\\n[Unfiltered thoughts and summary of the go-forward strategy.]
-// ### END OF MANDATORY STRUCTURE ###
+// ### YOUR TASK ###
+// 1.  **Review Data:** Examine all inputs to understand the current state of the narrative and the psychological state of the players.
+// 2.  **Create Shared Narrative:** Based on the combined actions and analysis, decide on the next story beat. Write a compelling, shared narrative for both players. Use the analysis to guide the tone (e.g., if Player A had red flags, maybe something slightly ominous happens).
+// 3.  **Generate Player-Specific Instructions:** For each player (A and B), write a detailed set of instructions for Dr. Gemini. This instruction string is what Dr. Gemini will use to generate the UI. It MUST contain:
+//     - A clear creative directive for the turn.
+//     - **MANDATORY PROBE VARIETY:** A directive for Dr. Gemini to generate a rich set of new, non-repetitive interactive probes (main_action, deep probe, breadth probe, etc.). Use the ProbeHistory within the provided clinical report to ensure variety.
+//     - **CRITICAL: Notes Pass-Through:** The complete 'notes' markdown for that player. You MUST use the full 'clinical_report' string provided in that player's analysis object as the value for the notes. You are passing this through, not creating it.
+//     - **CRITICAL: Analysis Pass-Through:** A directive for Dr. Gemini to generate the six hidden text fields for the interstitial screen. The content for these fields MUST be taken directly from the 'playerA_analysis' and 'playerB_analysis' objects you received.
+//         - For Player A's instructions, 'own_clinical_analysis' comes from playerA_analysis.clinical_report. 'partner_clinical_analysis' comes from playerB_analysis.clinical_report.
+//         - For Player B's instructions, 'own_clinical_analysis' comes from playerB_analysis.clinical_report. 'partner_clinical_analysis' comes from playerA_analysis.clinical_report.
+//         - The red and green flags are passed through similarly. You are a CONDUIT for the analysis, not the generator.
 
 // ### OUTPUT FORMAT ###
-// You must structure your output exactly as follows, using '---|||---' as the separator:
+// Structure your output exactly as follows, using '---|||---' as the separator:
 // [SHARED NARRATIVE AND SCENE SETUP FOR BOTH PLAYERS]
 // ---|||---
-// [DETAILED INSTRUCTIONS FOR PLAYER A's TURN]
+// [DETAILED INSTRUCTIONS FOR PLAYER A's TURN, INCLUDING PASS-THROUGH OF NOTES AND ANALYSIS]
 // ---|||---
-// [DETAILED INSTRUCTIONS FOR PLAYER B's TURN]
+// [DETAILED INSTRUCTIONS FOR PLAYER B's TURN, INCLUDING PASS-THROUGH OF NOTES AND ANALYSIS]
 `,
     masturbationModeAddendum: `
 **DEPRAVITY OVERRIDE: MASTURBATION MODE ACTIVE**
@@ -129,6 +110,31 @@ export const sceneFeatures = {
     vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
     wildcards: ["a sudden downpour", "a shared, unusual dessert", "a street performer interrupts", "a power outage", "an old photograph is found", "a cryptic note is passed"]
 };
+
+export const analyzer_prompt = `// GEEMS Local Analyzer v1.0 - JSON ONLY
+// YOUR DIRECTIVE: You are a sharp, insightful psychological analyst. Your task is to analyze a single player's actions for a given turn and produce a concise report.
+// You will be given the player's previous notes (for context) and their actions for the current turn.
+// Your analysis MUST be based ONLY on the provided player's data. Do NOT invent actions for the other player.
+
+// ### INPUT CONTEXT ###
+// - Previous Notes: A markdown document containing the player's history, profile, and psychological state before this turn.
+// - Player Actions: A JSON object detailing the choices the player just made in response to their UI.
+
+// ### TASK ###
+// 1.  **Analyze Actions:** Review the player's actions in the context of their notes. What do these choices reveal about their personality, strategy, and psychological state?
+// 2.  **Generate Flags:**
+//     - Create a "green flag" report: A bulleted list of positive, clever, or healthy behaviors observed this turn.
+//     - Create a "red flag" report: A bulleted list of concerning, manipulative, or potentially problematic behaviors observed this turn.
+// 3.  **Update Clinical Report:** Update the full clinical report markdown string. You MUST use the provided 'previous notes' as the base and update it with new findings from this turn's actions. The turn number should be incremented.
+
+// ### OUTPUT FORMAT ###
+// Your entire output MUST be a single, valid, compact JSON object. Do NOT wrap it in markdown or any other text.
+// The JSON object must have exactly three string keys: "green_flags", "red_flags", and "clinical_report".
+// The value for "green_flags" and "red_flags" should be a single string containing a markdown bulleted list (e.g., "* Did this\\n* Did that").
+// The value for "clinical_report" must be the complete, updated, multi-line markdown text for the clinical report, with '\\n' for newlines.
+
+// --- Analysis Data Follows ---
+`;
 
 /**
  * Uses a quick flash LLM call to generate dynamic scene-setting options.
@@ -153,7 +159,7 @@ Example for a non-explicit theme:
 }`;
 
     try {
-        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-2.5-flash-lite");
         const options = JSON.parse(responseJson);
         // Basic validation to ensure the response is in the correct format
         if (options && Array.isArray(options.locations) && Array.isArray(options.vibes) && Array.isArray(options.wildcards)) {
@@ -202,7 +208,7 @@ The final JSON object MUST have this exact structure:
 
     try {
         // Use a faster model for this less complex generation
-        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-2.5-flash-lite");
         const gameData = JSON.parse(responseJson);
         // Add validation here if needed
         console.log("Successfully fetched dynamic minigame actions:", gameData);
@@ -253,7 +259,7 @@ Example:
 `;
 
     try {
-        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const responseJson = await llmApiCall(prompt, "application/json", "gemini-2.5-flash-lite");
         const outcomeData = JSON.parse(responseJson);
         console.log("Successfully fetched minigame outcome:", outcomeData);
         return outcomeData;
