@@ -832,8 +832,24 @@ async function initiateTurnAsPlayer1(turnData) {
 
     try {
         const orchestratorPrompt = constructPrompt('orchestrator', turnData);
-        // The orchestrator now returns a single plain text block
-        const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
+        let orchestratorText;
+        let orchestratorAttempts = 0;
+        const maxOrchestratorAttempts = 3;
+
+        while (orchestratorAttempts < maxOrchestratorAttempts) {
+            orchestratorAttempts++;
+            console.log(`Orchestrator attempt ${orchestratorAttempts}/${maxOrchestratorAttempts}`);
+            orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
+            if (orchestratorText && orchestratorText.includes('---|||---')) {
+                break; // Valid format, exit loop
+            }
+            console.warn(`Orchestrator output format invalid. Retrying...`);
+        }
+
+        if (!orchestratorText || !orchestratorText.includes('---|||---')) {
+            throw new Error("Failed to get valid orchestrator output after multiple attempts.");
+        }
+
         currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
         // Send the entire text block to Player 2

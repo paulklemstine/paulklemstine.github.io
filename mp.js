@@ -81,7 +81,9 @@ const MPLib = (() => {
             if (err.type === 'unavailable-id') {
                 // The master directory already exists. Destroy this peer and create an anonymous one.
                 logMessage(`Master Directory already exists. Connecting as client.`, 'info');
+                console.log("About to destroy masterPeer due to unavailable-id.", masterPeer);
                 masterPeer.destroy();
+                console.log("masterPeer destroyed.");
                 isMasterDirectory = false;
 
                 masterPeer = new Peer({ debug: config.debugLevel, key: API_KEY });
