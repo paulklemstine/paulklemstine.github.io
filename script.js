@@ -2187,22 +2187,102 @@ function handleRoomDataReceived(senderId, data) {
             }
             break;
 
+function handleMinigameReady(payload) {
+    if (minigameActive) {
+        console.log("Minigame is already active, ignoring 'minigame_ready' signal.");
+        return;
+    }
+    console.log("Handling minigame_ready signal. Starting minigame UI.");
+    const { initialData, preloadData } = payload;
+
+    minigameActionData = initialData;
+    preloadedMinigameData = preloadData;
+
+    startMinigame((winner) => {
+        if (amIPlayer1) {
+            console.log(`Minigame session finished. Overall winner: ${winner}`);
+            lastMinigameWinner = winner;
+        }
+    });
+}
+
+function handleRoomDataReceived(senderId, data) {
+    console.log(`MPLib Event: Room data received from ${senderId.slice(-6)}`, data);
+    if (!data || !data.type) {
+        console.warn("Received data without type from room peer:", senderId.slice(-6));
+        return;
+    }
+
+    switch (data.type) {
+        case 'date_proposal':
+            console.log(`Received date proposal from ${senderId}`);
+            incomingProposal = {
+                proposerId: senderId,
+                proposerExplicitMode: data.payload?.proposerExplicitMode || false
+            };
+            showProposalModal();
+            break;
+        case 'date_accepted':
+            console.log(`Date proposal accepted by ${senderId}`);
+            showNotification(`Your date with ${senderId.slice(-4)} was accepted! Starting...`, "success");
+            const accepterExplicitMode = data.payload?.accepterExplicitMode || false;
+            isDateExplicit = isExplicitMode && accepterExplicitMode;
+            console.log(`Date explicit mode set to: ${isDateExplicit}`);
+            startNewDate(senderId, true);
+            break;
+        case 'date_declined':
+            console.log(`Date proposal declined by ${senderId}`);
+            showNotification(`Your date with ${senderId.slice(-4)} was declined.`, "warn");
+            break;
+
+        case 'scene_selection_submission':
+            console.log(`Received scene selections from ${senderId.slice(-6)}`);
+            if (isDateActive) {
+                sceneSelections.set(senderId, data.payload);
+                checkForSceneSelectionCompletion();
+            }
+            break;
+
+        case 'spinner_state_update':
+            // This is now handled by a dedicated function for clarity
+            if (data.payload && data.payload.spinners) {
+                handleSpinnerStateUpdate(data.payload.spinners);
+            }
+            break;
+        // The 'spinner_result' case is now obsolete, as the final result is
+        // part of the continuous state update. P1 calls endSpinner directly,
+        // and P2 calls it when all spinners stop spinning in the state update.
+
+        case 'minigame_data':
+            if (minigameActive && !amIPlayer1) {
+                minigameActionData = data.payload;
+                console.log("Received minigame data from Player 1.", minigameActionData);
+                resetRoundUI(); // Now that we have data, setup the UI
+            }
+            break;
+
+        case 'minigame_preload_data':
+            if (minigameActive && !amIPlayer1) {
+                preloadedMinigameData = data.payload;
+                console.log("Received preloaded minigame data for next round.", preloadedMinigameData);
+            }
+            break;
+
+        case 'minigame_move':
+            if (minigameActive && !partnerMove) {
+                partnerMove = data.payload.move;
+                console.log(`Partner chose ${partnerMove}`);
+                checkForRoundCompletion();
+            }
+            const button = document.querySelector(`.propose-date-button[data-peer-id="${senderId}"]`);
+            if (button) {
+                button.disabled = false;
+                button.textContent = 'Propose Date';
+            }
+            break;
+
         case 'minigame_ready':
-            console.log("Received minigame_ready signal with data. Starting minigame for all players.");
-            const { initialData, preloadData } = data.payload;
-
-            // Set the data for the current and next round
-            minigameActionData = initialData;
-            preloadedMinigameData = preloadData;
-
-            // Now that the data is loaded, start the minigame UI.
-            startMinigame((winner) => {
-                // The onComplete callback is only relevant for player 1, who sets the state for the next turn.
-                if (amIPlayer1) {
-                    console.log(`Minigame session finished. Overall winner: ${winner}`);
-                    lastMinigameWinner = winner;
-                }
-            });
+            handleMinigameReady(data.payload);
             break;
 
         case 'generate_minigame_data':
@@ -2215,14 +2295,10 @@ function handleRoomDataReceived(senderId, data) {
                         const preloadData = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
 
                         if (initialData && preloadData) {
-                            console.log("Minigame data generated. Broadcasting 'minigame_ready' to room.");
-                            MPLib.broadcastToRoom({
-                                type: 'minigame_ready',
-                                payload: {
-                                    initialData: initialData,
-                                    preloadData: preloadData
-                                }
-                            });
+                            const payload = { initialData, preloadData };
+                            console.log("Minigame data generated. Broadcasting and handling locally.");
+                            MPLib.broadcastToRoom({ type: 'minigame_ready', payload: payload });
+                            handleMinigameReady(payload); // Player 2 handles it immediately
                         } else {
                             console.error("Failed to generate one or both sets of minigame actions.");
                         }
