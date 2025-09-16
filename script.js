@@ -578,7 +578,7 @@ async function generateLocalTurn(orchestratorText, playerRole) {
     setLoading(true); // Show interstitial
 
     try {
-        const parts = orchestratorText.split('---|||---');
+        const parts = orchestratorText.split(/\n?---\|\|\|---\n?|\n---\n/).filter(p => p.trim() !== '');
         if (parts.length !== 3) {
             throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
         }
