@@ -792,11 +792,8 @@ function checkForTurnPackages() {
         lastMinigameWinner = null; // Reset winner after use
         turnPackages.clear(); // Clear packages for the next turn
 
-        // The minigame for the *next* turn starts now, running in parallel with the AI generation.
-        startMinigame((winner) => {
-            console.log(`Minigame session finished. Overall winner: ${winner}`);
-            lastMinigameWinner = winner; // This will be used in the *next* orchestrator call.
-        });
+        // The minigame for the *next* turn starts now. Player 1 broadcasts the start signal.
+        MPLib.broadcastToRoom({ type: 'start_minigame' });
     }
 }
 
@@ -2213,6 +2210,18 @@ function handleRoomDataReceived(senderId, data) {
             }
             break;
 
+        case 'start_minigame':
+            // This message is received by both players to ensure the minigame UI starts synchronously.
+            console.log("Received start_minigame signal.");
+            startMinigame((winner) => {
+                // The onComplete callback is only relevant for player 1, who sets the state for the next turn.
+                if (amIPlayer1) {
+                    console.log(`Minigame session finished. Overall winner: ${winner}`);
+                    lastMinigameWinner = winner;
+                }
+            });
+            break;
+
         case 'turn_package_submission':
             console.log(`Received turn package from ${senderId.slice(-6)}`);
             if (isDateActive && amIPlayer1) {
@@ -3074,6 +3083,12 @@ function initializeGame() {
         MPLib.broadcastToRoom({ type: 'graceful_disconnect' });
         console.log("Sent graceful disconnect message.");
     });
+
+    // Minigame close button
+    const endMinigameBtn = document.getElementById('end-minigame-btn');
+    if (endMinigameBtn) {
+        endMinigameBtn.addEventListener('click', endMinigame);
+    }
 }
 
 function createInitialMessage() {
