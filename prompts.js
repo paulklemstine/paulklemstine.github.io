@@ -153,7 +153,7 @@ Example for a non-explicit theme:
 }`;
 
     try {
-        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const responseJson = await llmApiCall(prompt, "application/json", "low");
         const options = JSON.parse(responseJson);
         // Basic validation to ensure the response is in the correct format
         if (options && Array.isArray(options.locations) && Array.isArray(options.vibes) && Array.isArray(options.wildcards)) {
@@ -216,7 +216,7 @@ The final JSON object MUST have this exact structure:
 
     try {
         // Use a faster model for this less complex generation
-        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const responseJson = await llmApiCall(prompt, "application/json", "low");
         const gameData = JSON.parse(responseJson);
         // Add validation here if needed
         console.log("Successfully fetched dynamic minigame actions and rules:", gameData);
@@ -261,7 +261,7 @@ Example:
 `;
 
     try {
-        const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
+        const responseJson = await llmApiCall(prompt, "application/json", "low");
         const outcomeData = JSON.parse(responseJson);
         console.log("Successfully fetched round outcome:", outcomeData);
         return outcomeData;
