@@ -575,9 +575,9 @@ async function generateLocalTurn(orchestratorText, playerRole) {
     setLoading(true); // Show interstitial
 
     try {
-        // Use the unambiguous '%%%NEXT_SECTION%%%' separator.
-        const parts = orchestratorText.split('%%%NEXT_SECTION%%%').filter(p => p.trim() !== '');
-        if (parts.length !== 3) {
+        // Use a robust regex that accepts the new separator or falls back to the old one.
+        const parts = orchestratorText.split(/\n?%%%NEXT_SECTION%%%\n?|\n?---\|\|\|---\n?/).filter(p => p.trim() !== '');
+        if (parts.length < 3) { // Check for at least 3 parts, as there might be empty strings from the split.
             throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
         }
 
