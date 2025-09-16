@@ -126,8 +126,6 @@ let isDateExplicit = false;
 let globalRoomDirectory = { rooms: {}, peers: {} }; // Holds the global state
 let currentRoomName = null; // The name of the room the user is currently in
 let currentRoomIsPublic = true; // Whether the current room is public or private
-let localPlayerAnalysis = null;
-let partnerPlayerAnalysis = null;
 
 const remoteGameStates = new Map(); // Map<peerId, gameState>
 const LOCAL_PROFILE_KEY = 'sparksync_userProfile';
@@ -237,9 +235,9 @@ ${notes}
 
             prompt += `\n\n---\nLATEST TURN DATA\n---\n`;
             prompt += `player_input_A: ${JSON.stringify(playerA_actions)}\n`;
-            prompt += `previous_notes_A: ${JSON.stringify(playerA_notes)}\n\n`;
+            prompt += `previous_notes_A: \`\`\`markdown\n${playerA_notes}\n\`\`\`\n\n`;
             prompt += `player_input_B: ${JSON.stringify(playerB_actions)}\n`;
-            prompt += `previous_notes_B: ${JSON.stringify(playerB_notes)}\n`;
+            prompt += `previous_notes_B: \`\`\`markdown\n${playerB_notes}\n\`\`\`\n`;
             prompt += activeAddendum;
             prompt += minigameAddendum;
             prompt += `\n--- Generate instructions for both players based on the above. ---`;
@@ -338,13 +336,10 @@ function updateLocalProfileFromTurn(actions) {
 
     // Extract the detailed psychological profile from the 'notes' field
     if (actions.notes) {
-        // actions.notes is a string from the hidden input, so we parse it.
-        const newNotesObject = JSON.parse(actions.notes);
-        // Compare stringified versions to detect changes in the object.
-        if (JSON.stringify(profile.personality.notes) !== JSON.stringify(newNotesObject)) {
-            profile.personality.notes = newNotesObject; // Store the actual object
+        if (profile.personality.notes !== actions.notes) {
+            profile.personality.notes = actions.notes;
             updated = true;
-            console.log("Updated personality notes object.");
+            console.log("Updated personality notes.");
         }
     }
 
@@ -566,137 +561,132 @@ function restoreLocalState() {
     }
 }
 
-/**
- * Generates the Red/Green flags and Clinical Profile for the local player.
- * @param {object} playerActions - The actions the player just took.
- * @param {string} playerNotes - The player's notes from the previous turn.
- * @param {Array} history - The full game history.
- * @returns {Promise<object|null>} A promise that resolves to the analysis object or null on failure.
- */
-async function generatePlayerAnalysis(playerActions, playerNotes, history) {
-    console.log("Generating player analysis...");
-    try {
-        let prompt = geemsPrompts.dr_gemini_analysis_prompt;
-
-        // Add history section if it exists
-        if (history && history.length > 0) {
-            const historyString = history.map((turn, index) => `Turn ${history.length - index} ago:\n- Player-Facing UI:\n\`\`\`json\n${turn.ui}\n\`\`\`\n- Player Actions Taken:\n\`\`\`json\n${turn.actions}\n\`\`\``).join('\n\n---\n\n');
-            prompt += `\n\n---\nCONTEXT: PLAYER'S LAST ${history.length} TURNS (Most recent first)\n---\n${historyString}`;
-        }
-
-        prompt += `\n\n---\nLATEST TURN DATA FOR THIS PLAYER\n---\n`;
-        prompt += `player_input: ${JSON.stringify(playerActions)}\n`;
-        prompt += `previous_notes: ${JSON.stringify(playerNotes)}\n`;
-        prompt += `\n--- Generate the analysis JSON based on the above. ---`;
-
-        const analysisJsonString = await callGeminiApiWithRetry(prompt);
-        const analysis = JSON.parse(analysisJsonString);
-        console.log("Successfully generated player analysis:", analysis);
-        return analysis;
-
-    } catch (error) {
-        console.error("Error during player analysis generation:", error);
-        showError("Failed to generate Dr. Gemini's analysis.");
-        return null;
-    }
-}
-
-
-/**
- * Populates the interstitial screen with the analysis reports.
- */
-function renderInterstitialReports() {
-    console.log("Rendering interstitial reports with received data.");
-    const localProfile = getLocalProfile();
-    const partnerMasterId = MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId;
-    const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile || { name: "Partner" };
-
-    // Set names
-    document.getElementById('local-player-name').textContent = localProfile.name || 'You';
-    document.getElementById('partner-player-name').textContent = partnerProfile.name || 'Your Partner';
-
-    // Populate the 'You' column
-    document.getElementById('local-green-flags').innerHTML = localPlayerAnalysis?.green_flags || '<em>Analysis pending...</em>';
-    document.getElementById('local-red-flags').innerHTML = localPlayerAnalysis?.red_flags || '<em>Analysis pending...</em>';
-    document.getElementById('local-clinical-report').innerHTML = (localPlayerAnalysis?.clinical_profile || '<em>Analysis pending...</em>').replace(/\\n/g, '<br>');
-
-    // Populate the 'Partner' column
-    document.getElementById('partner-green-flags').innerHTML = partnerPlayerAnalysis?.green_flags || '<em>Analysis pending...</em>';
-    document.getElementById('partner-red-flags').innerHTML = partnerPlayerAnalysis?.red_flags || '<em>Analysis pending...</em>';
-    document.getElementById('partner-clinical-report').innerHTML = (partnerPlayerAnalysis?.clinical_profile || '<em>Analysis pending...</em>').replace(/\\n/g, '<br>');
-
-    interstitialSpinner.style.display = 'none';
-    interstitialReports.classList.remove('hidden');
-}
-
-
-/**
- * Checks if both local and partner analysis are ready, then renders them.
- * This function is now ONLY responsible for rendering the report text.
- * It does not enable the continue button anymore.
- */
-function checkAndRenderInterstitial() {
-    if (localPlayerAnalysis && partnerPlayerAnalysis) {
-        console.log("Both local and partner analyses are ready. Rendering reports.");
-        const interstitialTitle = document.querySelector('#interstitial-screen h2');
-        if (interstitialTitle) interstitialTitle.textContent = "Dr. Gemini's Report";
-
-        renderInterstitialReports();
-        checkIfReadyToContinue(); // Check if we can proceed
-    } else {
-        console.log("Still waiting for all analysis data.", { hasLocal: !!localPlayerAnalysis, hasPartner: !!partnerPlayerAnalysis });
-    }
-}
-
-/**
- * Checks if all data (analyses and next turn UI) is ready to proceed.
- * If so, it enables the continue button on the interstitial screen.
- */
-function checkIfReadyToContinue() {
-    const analysisReady = !!localPlayerAnalysis && (isDateActive ? !!partnerPlayerAnalysis : true);
-    const nextTurnUiReady = !!bufferedNextTurnUi && (isDateActive ? partnerFinishedBuffering : true);
-
-    console.log("Checking if ready to continue...", { analysisReady, nextTurnUiReady });
-
-    if (analysisReady && nextTurnUiReady) {
-        console.log("All data is ready. Enabling continue button.");
-        interstitialContinueButton.disabled = false;
-    }
-}
-
 
 /**
  * Generates the UI for the current player by calling the main UI generator prompt.
- * This function is now a utility that returns the UI JSON without rendering it.
+ * This is called by both players after receiving the orchestrator's plan.
  * @param {string} orchestratorText - The full plain text output from the orchestrator.
  * @param {string} playerRole - Either 'player1' or 'player2'.
- * @returns {Promise<object>} A promise that resolves to the UI JSON object.
  */
 async function generateLocalTurn(orchestratorText, playerRole) {
-    console.log(`Generating local turn UI for ${playerRole}...`);
+    console.log(`Generating local turn for ${playerRole}...`);
 
-    const parts = orchestratorText.split('---|||---');
-    if (parts.length !== 3) {
-        throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
-    }
+    // Reset interstitial title for turn generation
+    const interstitialTitle = document.querySelector('#interstitial-screen h2');
+    if (interstitialTitle) interstitialTitle.textContent = 'Generating Turn...';
 
-    const playerNumber = (playerRole === 'player1') ? 1 : 2;
-    const instructions = parts[playerNumber];
+    setLoading(true); // Show interstitial
 
-    const prompt = geemsPrompts.master_ui_prompt + "\n\n" + instructions;
-    const uiJsonString = await callGeminiApiWithRetry(prompt);
-    let uiJson = JSON.parse(uiJsonString);
-
-    if (!Array.isArray(uiJson) && typeof uiJson === 'object' && uiJson !== null) {
-        const arrayKey = Object.keys(uiJson).find(key => Array.isArray(uiJson[key]));
-        if (arrayKey) {
-            console.warn(`API returned an object. Found an array at key: '${arrayKey}'`);
-            uiJson = uiJson[arrayKey];
+    try {
+        const parts = orchestratorText.split('---|||---');
+        if (parts.length !== 3) {
+            throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
         }
+
+        const playerNumber = (playerRole === 'player1') ? 1 : 2;
+        const instructions = parts[playerNumber]; // 1 for P1, 2 for P2
+
+        // Combine the master prompt with the turn-specific instructions from the orchestrator.
+        const prompt = geemsPrompts.master_ui_prompt + "\n\n" + instructions;
+        const uiJsonString = await callGeminiApiWithRetry(prompt);
+        let uiJson = JSON.parse(uiJsonString);
+
+        // Defensively handle cases where the AI returns an object instead of an array
+        if (!Array.isArray(uiJson) && typeof uiJson === 'object' && uiJson !== null) {
+            const arrayKey = Object.keys(uiJson).find(key => Array.isArray(uiJson[key]));
+            if (arrayKey) {
+                const potentialArray = uiJson[arrayKey];
+                console.warn(`API returned an object. Found an array at key: '${arrayKey}'`);
+
+                // Check if the elements in the array are malformed (missing 'type')
+                if (potentialArray.length > 0 && potentialArray[0].type === undefined) {
+                    console.warn(`Transforming malformed array elements to conform to UI schema.`);
+                    uiJson = potentialArray.map(action => ({
+                        type: 'radio',
+                        name: 'main_action',
+                        label: action.label || action.action_id || 'Action', // Use label, fallback to action_id
+                        value: action.description || 'No description available.',
+                        color: '#FFFFFF' // Default color
+                    }));
+                } else {
+                    uiJson = potentialArray; // The array seems to be in the correct format
+                }
+            }
+        }
+
+        currentUiJson = uiJson;
+
+        // --- Interstitial Logic ---
+        if (Array.isArray(uiJson) && isDateActive) { // Only show for dates
+            // Find all the report and flag elements
+            const pA_green = uiJson.find(el => el.name === 'playerA_green_flags');
+            const pA_red = uiJson.find(el => el.name === 'playerA_red_flags');
+            const pB_green = uiJson.find(el => el.name === 'playerB_green_flags');
+            const pB_red = uiJson.find(el => el.name === 'playerB_red_flags');
+            const ownReport = uiJson.find(el => el.name === 'own_clinical_analysis');
+            const partnerReport = uiJson.find(el => el.name === 'partner_clinical_analysis');
+
+            // Get player profiles
+            const localProfile = getLocalProfile();
+            const partnerMasterId = MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId;
+            const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile || { name: "Partner" };
+
+            // Determine which set of flags/reports belong to local vs partner
+            const localIsPlayerA = amIPlayer1;
+            const localFlags = {
+                green: localIsPlayerA ? pA_green : pB_green,
+                red: localIsPlayerA ? pA_red : pB_red,
+                report: ownReport
+            };
+            const partnerFlags = {
+                green: localIsPlayerA ? pB_green : pA_green,
+                red: localIsPlayerA ? pB_red : pA_red,
+                report: partnerReport
+            };
+
+            // Get the DOM elements for the new layout
+            document.getElementById('local-player-name').textContent = localProfile.name || 'You';
+            document.getElementById('partner-player-name').textContent = partnerProfile.name || 'Your Partner';
+
+            // Populate the 'You' column
+            document.getElementById('local-green-flags').innerHTML = (localFlags.green && localFlags.green.value) ? localFlags.green.value.replace(/\\n/g, '<br>') : '<em>No specific green flags noted.</em>';
+            document.getElementById('local-red-flags').innerHTML = (localFlags.red && localFlags.red.value) ? localFlags.red.value.replace(/\\n/g, '<br>') : '<em>No specific red flags noted.</em>';
+            document.getElementById('local-clinical-report').innerHTML = (localFlags.report && localFlags.report.value) ? localFlags.report.value.replace(/\\n/g, '<br>') : '<em>Clinical report not available.</em>';
+
+            // Populate the 'Partner' column
+            document.getElementById('partner-green-flags').innerHTML = (partnerFlags.green && partnerFlags.green.value) ? partnerFlags.green.value.replace(/\\n/g, '<br>') : '<em>No specific green flags noted.</em>';
+            document.getElementById('partner-red-flags').innerHTML = (partnerFlags.red && partnerFlags.red.value) ? partnerFlags.red.value.replace(/\\n/g, '<br>') : '<em>No specific red flags noted.</em>';
+            document.getElementById('partner-clinical-report').innerHTML = (partnerFlags.report && partnerFlags.report.value) ? partnerFlags.report.value.replace(/\\n/g, '<br>') : '<em>Clinical report not available.</em>';
+
+        } else {
+            console.warn("API response for UI is not an array or not in a date, skipping interstitial report generation.", uiJson);
+            // Clear all reports if the response is invalid
+            const reportIds = ['local-green-flags', 'local-red-flags', 'local-clinical-report', 'partner-green-flags', 'partner-red-flags', 'partner-clinical-report'];
+            reportIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerHTML = '<em>Could not parse analysis.</em>';
+            });
+        }
+
+
+        interstitialSpinner.style.display = 'none';
+        interstitialReports.classList.remove('hidden');
+        interstitialContinueButton.disabled = false;
+        // --- End Interstitial Logic ---
+
+        renderUI(currentUiJson);
+        playTurnAlertSound();
+
+    } catch (error) {
+        console.error(`Error during local turn generation for ${playerRole}:`, error);
+        showError("Failed to generate your turn. Please try again.");
+        interstitialScreen.style.display = 'none';
+    } finally {
+        setLoading(false);
     }
-    console.log(`Finished generating UI for ${playerRole}.`);
-    return uiJson; // Return the JSON
 }
+
+
 
 function renderDebugPanel() {
     if (!debugLogsContainer) return;
@@ -713,6 +703,7 @@ function renderDebugPanel() {
 
         const summary = document.createElement('summary');
         const title = document.createElement('span');
+        // Use toLocaleTimeString for readability
         title.textContent = `[${log.timestamp.toLocaleTimeString()}] ${log.model}`;
         if (log.isError) {
             title.style.color = '#dc3545'; // Red for errors
@@ -726,6 +717,7 @@ function renderDebugPanel() {
         const content = document.createElement('div');
         content.className = 'debug-log-content';
 
+        // Use a helper to safely display content
         const escapeHtml = (unsafe) => {
             if (unsafe === null || unsafe === undefined) return '';
             return unsafe.toString()
@@ -767,96 +759,110 @@ function checkForTurnCompletion() {
 
     startMinigame((winner) => {
         if (amIPlayer1) {
-            const myRoomId = MPLib.getLocalRoomId();
-            const partnerRoomId = roomConnections.keys().next().value;
-            const playerA_actions = turnSubmissions.get(myRoomId);
-            const playerB_actions = turnSubmissions.get(partnerRoomId);
+        const myRoomId = MPLib.getLocalRoomId();
+        const partnerRoomId = roomConnections.keys().next().value;
+        const playerA_actions = turnSubmissions.get(myRoomId);
+        const playerB_actions = turnSubmissions.get(partnerRoomId);
 
-            if (!playerA_actions || !playerB_actions) {
-                showError("FATAL: Could not map submissions to players. Aborting turn.");
-                if (spinnerModal) spinnerModal.style.display = 'none';
-                turnSubmissions.clear();
-                return;
-            }
-
-            initiateTurnAsPlayer1({
-                playerA_actions: playerA_actions,
-                playerB_actions: playerB_actions,
-                playerA_notes: JSON.parse(playerA_actions.notes || '{}'),
-                playerB_notes: JSON.parse(playerB_actions.notes || '{}'),
-                isExplicit: isDateExplicit,
-                history: historyQueue,
-                minigameWinner: winner
-            });
-
+        if (!playerA_actions || !playerB_actions) {
+            showError("FATAL: Could not map submissions to players. Aborting turn.");
+            if (spinnerModal) spinnerModal.style.display = 'none'; // Hide spinner on error
             turnSubmissions.clear();
-        } else {
-            console.log("I am Player 2. My work is done for this turn, waiting for P1.");
-            turnSubmissions.clear();
+            return;
         }
-    });
+
+        initiateTurnAsPlayer1({
+            playerA_actions: playerA_actions,
+            playerB_actions: playerB_actions,
+            playerA_notes: playerA_actions.notes,
+            playerB_notes: playerB_actions.notes,
+            isExplicit: isDateExplicit,
+            history: historyQueue,
+            minigameWinner: winner
+        });
+
+        turnSubmissions.clear();
+    } else {
+        // Player 2's work is done, they just wait for the next turn from P1.
+        console.log("I am Player 2. My work is done for this turn, waiting for P1.");
+        turnSubmissions.clear();
+    }
+});
 }
 
-/**
- * Initiates the generation of the *next* turn's UI for a single player.
- * This runs in the background while the player views the analysis of the current turn.
- */
-async function initiateTurnGenerationSinglePlayer(playerActions, history) {
-    console.log("Initiating single-player NEXT turn generation...");
+async function initiateSinglePlayerTurn(turnData, history = []) {
+    console.log("Initiating single-player turn...");
+    setLoading(true, true);
+
     try {
-        const parsedNotes = JSON.parse(playerActions.notes || '{}');
+        // In single player, we can treat the player as both Player A and Player B.
+        // The orchestrator is designed for two sets of inputs, so we provide the same for both.
         const orchestratorTurnData = {
-            playerA_actions: playerActions, playerB_actions: playerActions,
-            playerA_notes: parsedNotes, playerB_notes: parsedNotes,
-            isExplicit: isExplicitMode, history: history
+            playerA_actions: turnData,
+            playerB_actions: turnData,
+            playerA_notes: turnData.notes,
+            playerB_notes: turnData.notes,
+            isExplicit: isExplicitMode,
+            history: history
         };
 
         const orchestratorPrompt = constructPrompt('orchestrator', orchestratorTurnData);
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
-        currentOrchestratorText = orchestratorText;
+        currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
-        bufferedNextTurnUi = await generateLocalTurn(orchestratorText, 'player1');
-
-        console.log("Single player next turn UI buffered.");
-        checkIfReadyToContinue();
+        // We only care about Player A's output for the single player.
+        await generateLocalTurn(orchestratorText, 'player1');
 
     } catch (error) {
         console.error("Error during single-player turn generation:", error);
-        showError("Failed to generate the next turn. You may be stuck.");
+        let userMessage = "Failed to generate the next turn. Please try again.";
+        if (error.message && error.message.includes('503')) {
+            userMessage = "The AI is currently overloaded. Please wait a moment and resubmit your turn.";
+        }
+        showError(userMessage);
+        setLoading(false);
     }
 }
 
 /**
- * Kicks off the next turn generation process. Called only by Player 1.
- * This function makes the 'orchestrator' call and distributes the plan.
- * It does NOT handle analysis, only UI generation for the next turn.
+ * Kicks off the turn generation process. Called only by Player 1.
+ * This function makes the 'orchestrator' call and distributes the plain text plan.
  */
 async function initiateTurnAsPlayer1(turnData) {
-    console.log("Player 1 is initiating NEXT turn generation...");
+    console.log("Player 1 is initiating the turn by calling the orchestrator...");
 
     try {
         const orchestratorPrompt = constructPrompt('orchestrator', turnData);
+        // The orchestrator now returns a single plain text block
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
-        currentOrchestratorText = orchestratorText;
+        currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
+        // Send the entire text block to Player 2
         MPLib.sendDirectToRoomPeer(currentPartnerId, {
             type: 'orchestrator_output',
-            payload: { orchestratorText }
+            payload: orchestratorText
         });
 
-        bufferedNextTurnUi = await generateLocalTurn(orchestratorText, 'player1');
-        console.log("P1 has buffered the next turn UI.");
-
-        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'next_turn_buffered' });
-        checkIfReadyToContinue();
+        // Player 1 generates their own turn locally from the text block
+        await generateLocalTurn(orchestratorText, 'player1');
 
     } catch (error) {
-        console.error("Error during Player 1's turn initiation:", error);
-        showError("Failed to start the next turn due to an AI error.");
-        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'generation_error', payload: { message: "Partner failed to generate the next turn." }});
-        setLoading(false);
+        console.error("Error during orchestrator call:", error);
+        let userMessage = "Failed to get turn instructions from AI. Please try again.";
+        if (error.message && error.message.includes('503')) {
+            userMessage = "The AI is currently overloaded. Please wait a moment and resubmit your turn.";
+            // Notify Player 2
+            MPLib.sendDirectToRoomPeer(currentPartnerId, {
+                type: 'llm_overloaded',
+                payload: {}
+            });
+        }
+        showError(userMessage);
+        setLoading(false); // Hide spinner on error
     }
 }
+
+
 
 /**
  * A wrapper for the Gemini API call that includes retry logic and primary key fallback.
@@ -2115,16 +2121,20 @@ function handleRoomDataReceived(senderId, data) {
             break;
 
         case 'spinner_state_update':
+            // This is now handled by a dedicated function for clarity
             if (data.payload && data.payload.spinners) {
                 handleSpinnerStateUpdate(data.payload.spinners);
             }
             break;
+        // The 'spinner_result' case is now obsolete, as the final result is
+        // part of the continuous state update. P1 calls endSpinner directly,
+        // and P2 calls it when all spinners stop spinning in the state update.
 
         case 'minigame_data':
             if (minigameActive && !amIPlayer1) {
                 minigameActionData = data.payload;
                 console.log("Received minigame data from Player 1.", minigameActionData);
-                resetRoundUI();
+                resetRoundUI(); // Now that we have data, setup the UI
             }
             break;
 
@@ -2151,54 +2161,34 @@ function handleRoomDataReceived(senderId, data) {
         case 'turn_submission':
             console.log(`Received turn submission from ${senderId.slice(-6)}`);
             if (isDateActive) {
+                // The payload is already a JS object, no need to parse it again.
                 const actions = data.payload;
+                // Use the room ID as the key
                 turnSubmissions.set(senderId, actions);
                 checkForTurnCompletion();
             }
             break;
 
-        case 'orchestrator_output':
-            console.log(`Received orchestrator output from ${senderId.slice(-6)}`);
+        case 'new_turn_ui':
+            console.log(`Received new turn UI from ${senderId}`);
             if (isDateActive && !amIPlayer1) {
-                const { orchestratorText } = data.payload;
-                currentOrchestratorText = orchestratorText;
-
-                // Player 2 generates their UI and buffers it
-                generateLocalTurn(orchestratorText, 'player2')
-                    .then(uiJson => {
-                        bufferedNextTurnUi = uiJson;
-                        console.log("P2 has buffered the next turn UI.");
-                        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'next_turn_buffered' });
-                        checkIfReadyToContinue();
-                    })
-                    .catch(error => {
-                        console.error("Error during Player 2's turn generation:", error);
-                        showError("Failed to generate your turn due to an AI error from your partner.");
-                        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'generation_error', payload: { message: "Partner failed to generate their turn." }});
-                    });
+                currentUiJson = data.payload;
+                renderUI(currentUiJson);
+                playTurnAlertSound();
+                submitButton.disabled = false;
+                setLoading(false, true);
             }
             break;
-
-        case 'analysis_swap':
-            console.log(`Received analysis swap from partner ${senderId.slice(-6)}`);
-            partnerPlayerAnalysis = data.payload;
-            checkAndRenderInterstitial();
+        case 'orchestrator_output':
+            console.log(`Received orchestrator output from ${senderId}`);
+            currentOrchestratorText = data.payload; // Capture the orchestrator output
+            if (isDateActive && !amIPlayer1) {
+                generateLocalTurn(data.payload, 'player2');
+            }
             break;
-
-        case 'next_turn_buffered':
-            console.log(`Partner ${senderId.slice(-6)} has finished buffering their next turn.`);
-            partnerFinishedBuffering = true;
-            checkIfReadyToContinue();
-            break;
-
-        case 'generation_error':
-            console.error("Received a generation error from partner:", data.payload.message);
-            showError(data.payload.message);
-            setLoading(false); // Unlock the UI
-            break;
-
         case 'profile_update':
             console.log(`Received profile update from ${senderId.slice(-6)}`, data.payload);
+            // Use the Master ID for storage to keep it consistent
             const masterId = MPLib.getRoomConnections().get(senderId)?.metadata?.masterId || senderId;
             if (!remoteGameStates.has(masterId)) {
                 remoteGameStates.set(masterId, {});
@@ -2206,12 +2196,23 @@ function handleRoomDataReceived(senderId, data) {
             remoteGameStates.get(masterId).profile = data.payload;
             console.log(`Updated remote profile for ${masterId.slice(-6)}`);
 
+            // Re-render the lobby if it's currently being viewed to show updates live.
             if (lobbyContainer.style.display === 'block') {
                 renderLobby();
             }
             break;
-
+        case 'new_turn_ui':
+            console.log(`Received new turn UI from ${senderId}`);
+            if (isDateActive && !amIPlayer1) {
+                currentUiJson = data.payload;
+                renderUI(currentUiJson);
+                playTurnAlertSound();
+                submitButton.disabled = false;
+                setLoading(false, true);
+            }
+            break;
         case 'scene_options':
+            // Player 2 receives the options from Player 1
             if (!amIPlayer1) {
                 console.log("Received scene options from Player 1:", data.payload);
                 startSceneSelection(data.payload);
@@ -2219,12 +2220,14 @@ function handleRoomDataReceived(senderId, data) {
             break;
         case 'graceful_disconnect':
             console.log(`Received graceful disconnect from ${senderId.slice(-6)}`);
+            // Manually close the connection. The 'onclose' handler in MPLib
+            // will then trigger the onRoomPeerLeft callback, which handles UI updates.
             MPLib.closeConnection(senderId);
             break;
         case 'llm_overloaded':
             console.log("Received LLM overloaded message from partner.");
             showError("The AI is currently overloaded. Please wait a moment and resubmit your turn.");
-            setLoading(false);
+            setLoading(false); // This will re-enable the submit button and hide loading indicators.
             break;
         default:
             console.warn(`Received unknown message type '${data.type}' from ${senderId.slice(-6)}`);
@@ -2242,13 +2245,13 @@ function handleError(type, error) {
 // --- UI Rendering ---
 
 function renderGlobalRoomList() {
-    if (isDateActive) return;
+    if (isDateActive) return; // Do not render the room list if a date is active
     const roomListContainer = document.getElementById('room-list');
     const directoryContainer = document.getElementById('global-directory-container');
     if (!roomListContainer || !directoryContainer) return;
 
-    directoryContainer.style.display = 'block';
-    roomListContainer.innerHTML = '';
+    directoryContainer.style.display = 'block'; // Make sure the whole section is visible
+    roomListContainer.innerHTML = ''; // Clear old list
 
     const { rooms } = globalRoomDirectory;
 
@@ -2257,6 +2260,7 @@ function renderGlobalRoomList() {
         return;
     }
 
+    // Sort rooms by name for a consistent order
     const sortedRoomNames = Object.keys(rooms).sort();
 
     sortedRoomNames.forEach(roomName => {
@@ -2293,60 +2297,52 @@ function renderGlobalRoomList() {
 
 // --- Event Listeners ---
 
+// Modify the original click listener
 submitButton.addEventListener('click', () => {
     if (isLoading) return;
-    setLoading(true); // Show interstitial screen immediately, disable all inputs
+    submitButton.disabled = true; // Prevent double-clicks
 
+    // --- Single source of truth for actions ---
     const playerActionsJson = collectInputState();
-    updateHistoryQueue(playerActionsJson);
+    updateHistoryQueue(playerActionsJson); // <-- BUG FIX: Actually update the history
     const playerActions = JSON.parse(playerActionsJson);
-    updateLocalProfileFromTurn(playerActions);
-
-    // --- Start Analysis of THIS turn in the background ---
-    generatePlayerAnalysis(playerActions, JSON.parse(playerActions.notes || '{}'), historyQueue)
-        .then(analysis => {
-            if (analysis) {
-                localPlayerAnalysis = analysis;
-                if (isDateActive) {
-                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
-                } else {
-                    // In single player, partner's analysis is the same as local
-                    partnerPlayerAnalysis = analysis;
-                }
-                checkAndRenderInterstitial();
-            }
-        })
-        .catch(error => {
-            console.error("Analysis generation failed:", error);
-            showError("Dr. Gemini's analysis failed. You can continue when the next turn is ready.");
-            localPlayerAnalysis = { error: "Failed to generate." };
-            if (isDateActive) {
-                 MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
-            } else {
-                 partnerPlayerAnalysis = { error: "Failed to generate." };
-            }
-            checkAndRenderInterstitial();
-        });
+    updateLocalProfileFromTurn(playerActions); // Update profile regardless of mode
 
 
     if (isDateActive) {
-        // --- Submit THIS turn's actions to partner to trigger NEXT turn's generation ---
+        // --- Symmetrical Two-Player Date Logic ---
         const myRoomId = MPLib.getLocalRoomId();
+
         if (myRoomId) {
             turnSubmissions.set(myRoomId, playerActions);
             console.log(`Locally recorded submission for ${myRoomId.slice(-6)}`);
-            MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
-            checkForTurnCompletion();
         } else {
             console.error("Could not get local room ID to record submission.");
-            setLoading(false);
+            submitButton.disabled = false;
             showError("A local error occurred. Could not submit turn.");
+            return;
         }
+
+        const loadingText = document.getElementById('loading-text');
+        if (loadingText) {
+            loadingText.textContent = 'Waiting for partner...';
+        }
+        setLoading(true, true);
+
+        showNotification("Actions submitted. Waiting for partner to submit...", "info");
+
+        // Broadcast actions to everyone in the room.
+        MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
+
+        checkForTurnCompletion();
+
     } else {
-        // --- Single-Player: Start NEXT turn generation in the background ---
-        initiateTurnGenerationSinglePlayer(playerActions, historyQueue);
+        // --- Single-Player Logic ---
+        console.log("Submit button clicked (single-player mode).");
+        initiateSinglePlayerTurn(playerActions, historyQueue);
     }
 });
+// --- MODIFICATION END: Long Press Logic ---
 
 
 apiKeyInput.addEventListener('input', () => {
@@ -2374,12 +2370,15 @@ resetGameButton.addEventListener('click', () => {
     if (isLoading || resetGameButton.disabled) return;
     if (confirm('Reset game? This will clear local progress. Are you sure?')) {
         console.log("Resetting game state...");
+        // Clear all relevant local storage items
         localStorage.removeItem(LOCAL_STORAGE_KEY);
         localStorage.removeItem('sparksync_apiKey');
-        localStorage.removeItem(LOCAL_PROFILE_KEY);
+        localStorage.removeItem(LOCAL_PROFILE_KEY); // Also delete the user's profile
         localStorage.removeItem('sparksync_hivemind');
         localStorage.removeItem('sparksync_lastLobby');
         console.log("Cleared localStorage, including user profile.");
+
+        // Reload the page to go back to the lobby selection
         window.location.reload();
     }
 });
@@ -2405,8 +2404,10 @@ function renderLobby() {
     const localMasterId = MPLib.getLocalMasterId();
     const localProfile = getLocalProfile();
 
+    // Create a list of all players to render, including the local player
     const playersToRender = [];
 
+    // Add the local player
     if (localMasterId) {
         playersToRender.push({
             id: localMasterId,
@@ -2415,21 +2416,22 @@ function renderLobby() {
         });
     }
 
+    // Add remote players
     const remotePeers = MPLib.getRoomConnections ? Array.from(MPLib.getRoomConnections().values()) : [];
     remotePeers.forEach(conn => {
         if (conn && conn.open) {
-            const peerMasterId = conn.metadata?.masterId || conn.peer;
+            const peerMasterId = conn.metadata?.masterId || conn.peer; // Fallback to room ID
             const remoteState = remoteGameStates.get(peerMasterId) || {};
             playersToRender.push({
                 id: peerMasterId,
                 profile: remoteState.profile || { name: `User-${peerMasterId.slice(-4)}`, gender: "Unknown", physical: {} },
                 isLocal: false,
-                roomConnection: conn
+                roomConnection: conn // Pass the connection for the button
             });
         }
     });
 
-    if (playersToRender.length <= 1) {
+    if (playersToRender.length <= 1) { // Only local player is here
         grid.innerHTML = '<p>No other users are currently online. Please wait for someone to connect.</p>';
     } else {
         playersToRender.forEach(player => {
@@ -2462,7 +2464,7 @@ function renderLobby() {
             if (!player.isLocal) {
                 const button = document.createElement('button');
                 button.className = 'geems-button propose-date-button';
-                button.dataset.masterId = player.id;
+                button.dataset.masterId = player.id; // Store the persistent masterId
 
                 if (player.roomConnection && player.roomConnection.open) {
                     button.textContent = 'Propose Date';
@@ -2470,6 +2472,7 @@ function renderLobby() {
                     button.onclick = (event) => {
                         const targetMasterId = event.target.dataset.masterId;
 
+                        // Find the correct room connection using the masterId
                         const connections = MPLib.getRoomConnections();
                         let targetRoomId = null;
                         for (const [roomId, conn] of connections.entries()) {
@@ -2517,6 +2520,7 @@ function showProposalModal() {
     const proposerProfile = remoteGameStates.get(proposerMasterId)?.profile;
     proposerName.textContent = proposerProfile?.name || `User-${incomingProposal.proposerId.slice(-4)}`;
 
+    // Use .onclick to easily overwrite previous listeners
     proposalAcceptButton.onclick = () => {
         if (!incomingProposal) return;
         console.log(`Accepting date from ${incomingProposal.proposerId}`);
@@ -2526,11 +2530,12 @@ function showProposalModal() {
         MPLib.sendDirectToRoomPeer(incomingProposal.proposerId, { type: 'date_accepted', payload: payload });
         proposalModal.style.display = 'none';
 
+        // Determine if the date is explicit
         isDateExplicit = isExplicitMode && incomingProposal.proposerExplicitMode;
         console.log(`Date explicit mode set to: ${isDateExplicit}`);
 
-        startNewDate(incomingProposal.proposerId, false);
-        incomingProposal = null;
+        startNewDate(incomingProposal.proposerId, false); // We are Player 2 (receiver)
+        incomingProposal = null; // Clear the stored proposal
     };
 
     proposalDeclineButton.onclick = () => {
@@ -2538,12 +2543,12 @@ function showProposalModal() {
         console.log(`Declining date from ${incomingProposal.proposerId}`);
         MPLib.sendDirectToRoomPeer(incomingProposal.proposerId, { type: 'date_declined' });
         proposalModal.style.display = 'none';
-        incomingProposal = null;
+        incomingProposal = null; // Clear the stored proposal
     };
 
     proposalModal.style.display = 'flex';
 }
-window.showProposalModal = showProposalModal;
+window.showProposalModal = showProposalModal; // Expose for testing
 
 /** Transitions from lobby to game view and initializes date state */
 async function startNewDate(partnerId, iAmPlayer1) {
@@ -2555,25 +2560,31 @@ async function startNewDate(partnerId, iAmPlayer1) {
     turnSubmissions.clear();
     sceneSelections.clear();
 
+    // Hide lobby, show game
     const directoryContainer = document.getElementById('global-directory-container');
     if(directoryContainer) directoryContainer.style.display = 'none';
     if(lobbyContainer) lobbyContainer.style.display = 'none';
     if(gameWrapper) gameWrapper.style.display = 'block';
 
+    // Player 1 generates the scene options and shows a loading modal.
+    // Player 2 just waits.
     if (amIPlayer1) {
         if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'flex';
         try {
             const dynamicOptions = await getDynamicSceneOptions(isDateExplicit, callGeminiApiWithRetry);
+            // When P1 is done, they broadcast the options to P2.
             MPLib.broadcastToRoom({ type: 'scene_options', payload: dynamicOptions });
             startSceneSelection(dynamicOptions);
         } catch (error) {
             console.error("Error generating dynamic scene options:", error);
             showError("Could not generate scene options. Please try starting a new date.");
+            // Fallback to static options on error
             startSceneSelection(sceneFeatures);
         } finally {
             if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'none';
         }
     } else {
+        // Player 2 shows a simple waiting message, but not a modal.
         uiContainer.innerHTML = `<div class="text-center p-8"><h2>Waiting for Player 1 to set the scene...</h2><p>The first date options will appear here shortly.</p></div>`;
     }
 }
@@ -2585,10 +2596,12 @@ function startSceneSelection(options) {
     const selectionGrid = document.createElement('div');
     selectionGrid.className = 'scene-selection-grid';
 
+    // Use dynamic options, but fall back to static if they are missing
     const locations = options?.locations || sceneFeatures.locations;
     const vibes = options?.vibes || sceneFeatures.vibes;
     const wildcards = options?.wildcards || sceneFeatures.wildcards;
 
+    // Create columns for each category
     const locationColumn = document.createElement('div');
     locationColumn.innerHTML = '<h3>Locations</h3>';
     locations.slice(0, 5).forEach(loc => locationColumn.appendChild(createSelectionCheckbox('location', loc)));
@@ -2653,6 +2666,7 @@ function checkForSceneSelectionCompletion() {
     }
     console.log("Both players have submitted scene selections.");
 
+    // Aggregate selections from both players for each category
     const allSelections = { location: [], vibe: [], wildcard: [] };
     for (const selections of sceneSelections.values()) {
         for (const category in selections) {
@@ -2671,7 +2685,7 @@ function checkForSceneSelectionCompletion() {
 
         let weightedItems = Object.entries(counts).map(([text, count]) => ({
             text: text,
-            weight: count
+            weight: count // count will be 1 for single selection, 2 for agreement
         }));
 
         if (weightedItems.length === 0) {
@@ -2693,6 +2707,7 @@ function checkForSceneSelectionCompletion() {
         wildcards: wildcardItems
     });
 
+    // Pass the arrays of weighted items to the new startSpinner function
     startSpinner(
         [
             { title: 'Location', items: locationItems },
@@ -2701,6 +2716,7 @@ function checkForSceneSelectionCompletion() {
         ],
         (winningResults) => {
             if (amIPlayer1) {
+                // Combine the results into a single scene description
                 const winningScene = `${winningResults[0]} with a ${winningResults[1].toLowerCase()} vibe, when suddenly ${winningResults[2].toLowerCase()}.`;
                 console.log("Final winning scene:", winningScene);
                 fetchFirstTurn(null, winningScene);
@@ -2715,21 +2731,28 @@ async function fetchFirstTurn(minigameWinner, scene) {
     if (loadingText) {
         loadingText.textContent = 'Inventing a new scenario... Please wait.';
     }
-    setLoading(true, true);
+    setLoading(true, true); // Use the simple spinner for the first turn
 
+    // Load the local profile to provide context to the AI if it exists.
     const localProfile = getLocalProfile();
     const profileString = `Player A's saved profile: ${JSON.stringify(localProfile)}. If profile data exists, use it when creating the notes and UI. Otherwise, ensure the UI probes for it.`;
 
+    // For the first turn, there are no previous actions or notes.
+    // The orchestrator will be guided by the 'firstrun_addendum'.
     const initialTurnData = {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
-        playerA_notes: { summary: `New subject (Player 1) starting date in scene: ${scene}.` },
-        playerB_notes: { summary: `New subject (Player 2) starting date in scene: ${scene}.` },
+        // The notes provide a clear starting point for the orchestrator AI.
+        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
+        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
         isExplicit: isDateExplicit,
-        minigameWinner: minigameWinner,
+        minigameWinner: minigameWinner, // This will be null, but we pass it anyway
+        // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
         isFirstTurn: true
     };
 
+    // We can now just call the same function used for all subsequent turns.
+    // This simplifies the logic and ensures consistency.
     await initiateTurnAsPlayer1(initialTurnData);
 }
 
@@ -2780,21 +2803,28 @@ function saveLobbyToHivemind(lobbyName) {
 function switchToRoom(roomName, isPublic) {
     console.log(`Switching to room: ${roomName} (Public: ${isPublic})`);
 
+    // Don't do anything if we're already in that room
     if (roomName === currentRoomName) {
         showNotification("You are already in this room.", "warn");
         return;
     }
 
+    // Provide immediate UI feedback
     const lobby = document.getElementById('lobby-container');
     if (lobby) {
         lobby.innerHTML = `<h2>Joining ${roomName}...</h2>`;
     }
 
+    // Leave the old room's network
     MPLib.leaveRoom();
 
+    // Set the new room name and join the new network
     currentRoomName = roomName;
     currentRoomIsPublic = isPublic;
     MPLib.joinRoom(roomName);
+
+    // The 'handleRoomConnected' callback will automatically notify the master directory
+    // of our new location once the connection is established.
 }
 
 function loadGameStateFromStorage() {
@@ -2802,6 +2832,7 @@ function loadGameStateFromStorage() {
     if (savedStateJSON) {
         try {
             const savedState = JSON.parse(savedStateJSON);
+            // Restore state, with fallbacks for safety
             currentUiJson = savedState.currentUiJson || null;
             historyQueue = savedState.historyQueue || [];
             isExplicitMode = savedState.isExplicitMode || false;
@@ -2809,9 +2840,10 @@ function loadGameStateFromStorage() {
 
             console.log("Game state loaded from localStorage.");
 
+            // Update UI based on loaded state
             if (currentUiJson) {
                 renderUI(currentUiJson);
-                apiKeyLocked = true;
+                apiKeyLocked = true; // If we have game state, key must have been locked
                 resetGameButton.disabled = false;
                  if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
                  if(gameWrapper) gameWrapper.style.display = 'block';
@@ -2821,37 +2853,23 @@ function loadGameStateFromStorage() {
 
         } catch (error) {
             console.error("Error loading game state from localStorage:", error);
-            localStorage.removeItem(LOCAL_STORAGE_KEY);
+            localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear corrupted data
         }
     }
 }
 
 function initializeGame() {
     console.log("Initializing Flagged with new Master Directory architecture...");
-    loadGameStateFromStorage();
+    loadGameStateFromStorage(); // Load saved state first
 
+    // Handle interstitial continue button click
     interstitialContinueButton.addEventListener('click', () => {
-        if (!bufferedNextTurnUi) {
-            console.error("Continue button clicked, but no buffered UI to render!");
-            return;
-        }
-
         interstitialScreen.style.display = 'none';
-        window.scrollTo(0, 0);
-
-        currentUiJson = bufferedNextTurnUi;
-        renderUI(currentUiJson);
-        playTurnAlertSound();
-
-        // Reset all the temporary state variables for the next cycle
-        localPlayerAnalysis = null;
-        partnerPlayerAnalysis = null;
-        bufferedNextTurnUi = null;
-        partnerFinishedBuffering = false;
-
-        setLoading(false);
+        window.scrollTo(0, 0); // Scroll to top
     });
 
+    // Hide the game wrapper and show the lobby selection by default
+    // This logic might be overridden by loadGameStateFromStorage if there's a saved game
     if (!currentUiJson) {
         if(gameWrapper) gameWrapper.style.display = 'none';
         if(lobbyContainer) lobbyContainer.style.display = 'none';
@@ -2859,21 +2877,25 @@ function initializeGame() {
     }
 
 
-    populateLobbySelector();
+    populateLobbySelector(); // Populate dropdown with any saved/preset lobbies
 
+    // This listener handles the initial login/API key submission
     joinLobbyButton.addEventListener('click', () => {
         const apiKey = apiKeyInput.value.trim();
         if (!apiKey) {
+            // This case should now only be hit if the primary key fails and the user deletes it.
             showError("API Key is required to connect.");
             return;
         }
 
+        // Save API key and hide the selection screen
         localStorage.setItem('sparksync_apiKey', apiKey);
         apiKeyLocked = true;
         hideError();
         if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
-        lobbyContainer.style.display = 'block';
+        lobbyContainer.style.display = 'block'; // Show the lobby container (which will initially be empty)
 
+        // The main entrypoint to the multiplayer library
         MPLib.initialize({
             debugLevel: 1,
             onStatusUpdate: handleStatusUpdate,
@@ -2888,11 +2910,13 @@ function initializeGame() {
             onRoomPeerDisconnected: (masterId) => {
                 console.log(`Peer with masterId ${masterId.slice(-6)} has disconnected. Cleaning up state.`);
                 remoteGameStates.delete(masterId);
+                // No need to call renderLobby here, as onRoomPeerLeft already does.
             },
             onRoomDataReceived: handleRoomDataReceived,
         });
     });
 
+    // Add listeners for the new room creation buttons
     const createPublicBtn = document.getElementById('create-public-room-btn');
     const createPrivateBtn = document.getElementById('create-private-room-btn');
     const newRoomInput = document.getElementById('new-room-name-input');
@@ -2912,11 +2936,13 @@ function initializeGame() {
     createPrivateBtn.addEventListener('click', () => {
         const roomName = newRoomInput.value.trim();
         if (roomName) {
+            // No check needed for private rooms as they are not listed
             switchToRoom(roomName, false);
             newRoomInput.value = '';
         }
     });
 
+    // --- New Key Management and Auto-Login Logic ---
     const primaryApiKey = getPrimaryApiKey();
     const savedApiKey = localStorage.getItem('sparksync_apiKey');
 
@@ -2925,15 +2951,16 @@ function initializeGame() {
         apiKeyInput.disabled = true;
         apiKeyInput.placeholder = "Using default key";
         console.log("Using primary API key.");
-        joinLobbyButton.click();
+        joinLobbyButton.click(); // Auto-login with the primary key
     } else if (savedApiKey) {
         apiKeyInput.value = savedApiKey;
         console.log("Using saved API key.");
-        joinLobbyButton.click();
+        joinLobbyButton.click(); // Auto-login with a previously user-provided key
     } else {
          console.log("No primary or saved key found. Waiting for user input.");
     }
 
+    // --- Debug Panel Listeners ---
     if (toggleDebugPanelButton && debugPanel) {
         toggleDebugPanelButton.addEventListener('click', () => {
             const isHidden = debugPanel.style.display === 'none';
@@ -2951,7 +2978,10 @@ function initializeGame() {
         });
     }
 
+    // Graceful disconnect
     window.addEventListener('beforeunload', () => {
+        // This is a best-effort attempt. Most modern browsers are strict
+        // about what can be done in this event handler.
         MPLib.broadcastToRoom({ type: 'graceful_disconnect' });
         console.log("Sent graceful disconnect message.");
     });
