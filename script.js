@@ -1889,8 +1889,8 @@ function handleRoomPeerLeft(peerId) {
 
 // --- Minigame Functions ---
 
-function startMinigame(onComplete) {
-    console.log("Starting 'Make a Move' Minigame UI...");
+async function startMinigame(onComplete) {
+    console.log("Starting 'Make a Move' Minigame...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
     minigameRound = 1;
@@ -1899,6 +1899,8 @@ function startMinigame(onComplete) {
     playerScore = 0;
     partnerScore = 0;
     player1IsInitiator = true; // Player 1 always starts as the initiator
+    minigameActionData = null; // Clear old data
+    preloadedMinigameData = null; // Clear old data
 
     if (minigameModal) minigameModal.style.display = 'flex';
     if (roundResultDisplay) roundResultDisplay.innerHTML = '';
@@ -1911,10 +1913,38 @@ function startMinigame(onComplete) {
     }
     updateScoreboard();
 
-    // The data is now pre-loaded by the 'minigame_ready' message handler.
-    // This function just sets up the UI.
-    minigameTitle.textContent = "Make a Move";
-    resetRoundUI();
+
+    // Player 1 is responsible for generating and distributing the game data
+    if (amIPlayer1) {
+        minigameTitle.textContent = "Generating Actions...";
+        try {
+            const data = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
+            if (data) {
+                minigameActionData = data;
+                MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
+                console.log("Minigame data generated and broadcasted.");
+                // Preload the next turn's data immediately
+                getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
+                    preloadedMinigameData = preloadData;
+                    MPLib.broadcastToRoom({ type: 'minigame_preload_data', payload: preloadData });
+                    console.log("Preloaded minigame data for next round and sent to partner.");
+                });
+                minigameTitle.textContent = "Make a Move";
+                resetRoundUI(); // Now we can setup the UI
+            } else {
+                showError("Could not generate minigame actions. Closing minigame.");
+                setTimeout(endMinigame, 3000);
+            }
+        } catch (error) {
+            console.error("Error getting minigame actions:", error);
+            showError("Failed to start minigame due to an API error.");
+            setTimeout(endMinigame, 3000);
+        }
+    } else {
+        // Player 2 just waits for the data
+        minigameTitle.textContent = "Partner is Generating Actions...";
+        roundResultDisplay.textContent = "Waiting for partner to create the game...";
+    }
 }
 
 function handlePlayerMove(move) {
@@ -2112,43 +2142,6 @@ function setMoveButtonsDisabled(disabled) {
     });
 }
 
-            if (data.payload && data.payload.spinners) {
-                handleSpinnerStateUpdate(data.payload.spinners);
-            }
-            break;
-
-        case 'minigame_move':
-            if (minigameActive && !partnerMove) {
-                partnerMove = data.payload.move;
-                console.log(`Partner chose ${partnerMove}`);
-                checkForRoundCompletion();
-            }
-            const button = document.querySelector(`.propose-date-button[data-peer-id="${senderId}"]`);
-            if (button) {
-                button.disabled = false;
-                button.textContent = 'Propose Date';
-            }
-            break;
-
-function handleMinigameReady(payload) {
-    if (minigameActive) {
-        console.log("Minigame is already active, ignoring 'minigame_ready' signal.");
-        return;
-    }
-    console.log("Handling minigame_ready signal. Starting minigame UI.");
-    const { initialData, preloadData } = payload;
-
-    minigameActionData = initialData;
-    preloadedMinigameData = preloadData;
-
-    startMinigame((winner) => {
-        if (amIPlayer1) {
-            console.log(`Minigame session finished. Overall winner: ${winner}`);
-            lastMinigameWinner = winner;
-        }
-    });
-}
-
 function handleRoomDataReceived(senderId, data) {
     console.log(`MPLib Event: Room data received from ${senderId.slice(-6)}`, data);
     if (!data || !data.type) {
@@ -2217,52 +2210,44 @@ function handleRoomDataReceived(senderId, data) {
                 console.log(`Partner chose ${partnerMove}`);
                 checkForRoundCompletion();
             }
-            break;
-
-        case 'minigame_ready':
-            handleMinigameReady(data.payload);
-            break;
-
-        case 'generate_minigame_data':
-            if (!amIPlayer1) {
-                console.log("Received delegation. Generating minigame data...");
-                (async () => {
-                    try {
-                        const initialData = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
-                        const preloadData = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
-
-                        if (initialData && preloadData) {
-                            const payload = { initialData, preloadData };
-                            console.log("Minigame data generated. Broadcasting and handling locally.");
-                            MPLib.broadcastToRoom({ type: 'minigame_ready', payload: payload });
-                            handleMinigameReady(payload);
-                        } else {
-                            console.error("Failed to generate one or both sets of minigame actions.");
-                        }
-                    } catch (error) {
-                        console.error("Error during delegated minigame generation:", error);
-                    }
-                })();
+            const button = document.querySelector(`.propose-date-button[data-peer-id="${senderId}"]`);
+            if (button) {
+                button.disabled = false;
+                button.textContent = 'Propose Date';
             }
             break;
 
-        case 'turn_package_submission':
-            console.log(`Received turn package from ${senderId.slice(-6)}`);
-            if (isDateActive && amIPlayer1) {
-                turnPackages.set(senderId, data.payload);
-                checkForTurnPackages();
+        case 'turn_submission':
+            console.log(`Received turn submission from ${senderId.slice(-6)}`);
+            if (isDateActive) {
+                // The payload is already a JS object, no need to parse it again.
+                const actions = data.payload;
+                // Use the room ID as the key
+                turnSubmissions.set(senderId, actions);
+                checkForTurnCompletion();
             }
             break;
 
+        case 'new_turn_ui':
+            console.log(`Received new turn UI from ${senderId}`);
+            if (isDateActive && !amIPlayer1) {
+                currentUiJson = data.payload;
+                renderUI(currentUiJson);
+                playTurnAlertSound();
+                submitButton.disabled = false;
+                setLoading(false, true);
+            }
+            break;
         case 'orchestrator_output':
             console.log(`Received orchestrator output from ${senderId}`);
-            currentOrchestratorText = data.payload;
+            currentOrchestratorText = data.payload; // Capture the orchestrator output
             if (isDateActive && !amIPlayer1) {
                 generateLocalTurn(data.payload, 'player2');
             }
             break;
         case 'profile_update':
             console.log(`Received profile update from ${senderId.slice(-6)}`, data.payload);
+            // Use the Master ID for storage to keep it consistent
             const masterId = MPLib.getRoomConnections().get(senderId)?.metadata?.masterId || senderId;
             if (!remoteGameStates.has(masterId)) {
                 remoteGameStates.set(masterId, {});
@@ -2270,11 +2255,23 @@ function handleRoomDataReceived(senderId, data) {
             remoteGameStates.get(masterId).profile = data.payload;
             console.log(`Updated remote profile for ${masterId.slice(-6)}`);
 
+            // Re-render the lobby if it's currently being viewed to show updates live.
             if (lobbyContainer.style.display === 'block') {
                 renderLobby();
             }
             break;
+        case 'new_turn_ui':
+            console.log(`Received new turn UI from ${senderId}`);
+            if (isDateActive && !amIPlayer1) {
+                currentUiJson = data.payload;
+                renderUI(currentUiJson);
+                playTurnAlertSound();
+                submitButton.disabled = false;
+                setLoading(false, true);
+            }
+            break;
         case 'scene_options':
+            // Player 2 receives the options from Player 1
             if (!amIPlayer1) {
                 console.log("Received scene options from Player 1:", data.payload);
                 startSceneSelection(data.payload);
@@ -2282,12 +2279,14 @@ function handleRoomDataReceived(senderId, data) {
             break;
         case 'graceful_disconnect':
             console.log(`Received graceful disconnect from ${senderId.slice(-6)}`);
+            // Manually close the connection. The 'onclose' handler in MPLib
+            // will then trigger the onRoomPeerLeft callback, which handles UI updates.
             MPLib.closeConnection(senderId);
             break;
         case 'llm_overloaded':
             console.log("Received LLM overloaded message from partner.");
             showError("The AI is currently overloaded. Please wait a moment and resubmit your turn.");
-            setLoading(false);
+            setLoading(false); // This will re-enable the submit button and hide loading indicators.
             break;
         default:
             console.warn(`Received unknown message type '${data.type}' from ${senderId.slice(-6)}`);
@@ -2358,78 +2357,48 @@ function renderGlobalRoomList() {
 // --- Event Listeners ---
 
 // Modify the original click listener
-submitButton.addEventListener('click', async () => {
+submitButton.addEventListener('click', () => {
     if (isLoading) return;
     submitButton.disabled = true; // Prevent double-clicks
 
+    // --- Single source of truth for actions ---
     const playerActionsJson = collectInputState();
-    updateHistoryQueue(playerActionsJson);
+    updateHistoryQueue(playerActionsJson); // <-- BUG FIX: Actually update the history
     const playerActions = JSON.parse(playerActionsJson);
     updateLocalProfileFromTurn(playerActions); // Update profile regardless of mode
 
+
     if (isDateActive) {
-        // --- New Asynchronous Analysis and Packaging Flow (Multiplayer) ---
-        setLoading(true, true);
-        showNotification("Analyzing your turn...", "info");
-
-        const previousNotes = playerActions.notes || "No previous notes found.";
-        const analysisResult = await analyzePlayerActions(playerActions, previousNotes);
-
-        if (!analysisResult) {
-            showError("Your action analysis failed. Please try submitting again.");
-            setLoading(false);
-            submitButton.disabled = false; // Re-enable submit on failure
-            return;
-        }
-
-        const turnPackage = {
-            actions: playerActions,
-            analysis: analysisResult
-        };
-
-        showNotification("Analysis complete. Waiting for partner...", "info");
+        // --- Symmetrical Two-Player Date Logic ---
         const myRoomId = MPLib.getLocalRoomId();
 
-        if (amIPlayer1) {
-            // Player 1 stores their package locally and waits for Player 2's.
-            turnPackages.set(myRoomId, turnPackage);
-            console.log("Player 1 created turn package, stored locally.");
-            checkForTurnPackages();
+        if (myRoomId) {
+            turnSubmissions.set(myRoomId, playerActions);
+            console.log(`Locally recorded submission for ${myRoomId.slice(-6)}`);
         } else {
-            // Player 2 sends their complete package to Player 1.
-            MPLib.sendDirectToRoomPeer(currentPartnerId, {
-                type: 'turn_package_submission',
-                payload: turnPackage
-            });
-            console.log("Player 2 sent turn package to Player 1.");
-        }
-
-    } else {
-        // --- Updated Single-Player Logic ---
-        console.log("Submit button clicked (single-player mode).");
-        setLoading(true, true);
-
-        const previousNotes = playerActions.notes || "No previous notes found.";
-        const analysisResult = await analyzePlayerActions(playerActions, previousNotes);
-
-        if (!analysisResult) {
-            showError("Your action analysis failed. Please try submitting again.");
-            setLoading(false);
-            submitButton.disabled = false; // Re-enable submit on failure
+            console.error("Could not get local room ID to record submission.");
+            submitButton.disabled = false;
+            showError("A local error occurred. Could not submit turn.");
             return;
         }
 
-        // In single player, we are both players, so the analysis is the same for both.
-        const turnData = {
-            playerA_actions: playerActions,
-            playerB_actions: playerActions, // Same actions
-            playerA_analysis: analysisResult,
-            playerB_analysis: analysisResult, // Same analysis
-            isExplicit: isExplicitMode,
-            history: historyQueue
-        };
+        const loadingText = document.getElementById('loading-text');
+        if (loadingText) {
+            loadingText.textContent = 'Waiting for partner...';
+        }
+        setLoading(true, true);
 
-        await initiateSinglePlayerTurn(turnData);
+        showNotification("Actions submitted. Waiting for partner to submit...", "info");
+
+        // Broadcast actions to everyone in the room.
+        MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
+
+        checkForTurnCompletion();
+
+    } else {
+        // --- Single-Player Logic ---
+        console.log("Submit button clicked (single-player mode).");
+        initiateSinglePlayerTurn(playerActions, historyQueue);
     }
 });
 // --- MODIFICATION END: Long Press Logic ---
@@ -2647,7 +2616,7 @@ async function startNewDate(partnerId, iAmPlayer1) {
     isDateActive = true;
     currentPartnerId = partnerId;
     amIPlayer1 = iAmPlayer1;
-    turnPackages.clear();
+    turnSubmissions.clear();
     sceneSelections.clear();
 
     // Hide lobby, show game
@@ -3081,12 +3050,6 @@ function initializeGame() {
         MPLib.broadcastToRoom({ type: 'graceful_disconnect' });
         console.log("Sent graceful disconnect message.");
     });
-
-    // Minigame close button
-    const endMinigameBtn = document.getElementById('end-minigame-btn');
-    if (endMinigameBtn) {
-        endMinigameBtn.addEventListener('click', endMinigame);
-    }
 }
 
 function createInitialMessage() {

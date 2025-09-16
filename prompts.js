@@ -64,7 +64,7 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
     // The orchestrator is now a Director that consumes pre-analyzed data.
     orchestrator: `// Flagged Director AI v2.0 (Text-Only Output)
 // YOUR DIRECTIVE: You are the Director. Your goal is to process the previous turn's data, including pre-computed analysis reports, and generate a complete set of instructions for Dr. Gemini (the UI generation AI).
-// Your output MUST be a single block of plain text with no JSON or markdown. It must contain exactly three sections, separated by '---|||---'.
+// Your output MUST be a single block of plain text with no JSON or markdown. It must contain exactly three sections, separated by '%%%NEXT_SECTION%%%'.
 
 // ### INPUT DATA ###
 // You will receive the following for the last turn:
@@ -106,12 +106,6 @@ Your primary directive is no longer storytelling; it is raw, unfiltered sexual g
 
 };
 
-export const sceneFeatures = {
-    locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
-    vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
-    wildcards: ["a sudden downpour", "a shared, unusual dessert", "a street performer interrupts", "a power outage", "an old photograph is found", "a cryptic note is passed"]
-};
-
 export const analyzer_prompt = `// GEEMS Local Analyzer v1.0 - JSON ONLY
 // YOUR DIRECTIVE: You are a sharp, insightful psychological analyst. Your task is to analyze a single player's actions for a given turn and produce a concise report.
 // You will be given the player's previous notes (for context) and their actions for the current turn.
@@ -136,6 +130,12 @@ export const analyzer_prompt = `// GEEMS Local Analyzer v1.0 - JSON ONLY
 
 // --- Analysis Data Follows ---
 `;
+
+export const sceneFeatures = {
+    locations: ["a quiet cafe", "a bustling city park", "a cozy library", "an elegant art museum", "a lively bar", "a fancy restaurant", "a secluded beach at sunset", "a historic bookstore"],
+    vibes: ["romantic", "casual", "adventurous", "intellectual", "mysterious", "playful", "intense", "dreamy"],
+    wildcards: ["a sudden downpour", "a shared, unusual dessert", "a street performer interrupts", "a power outage", "an old photograph is found", "a cryptic note is passed"]
+};
 
 /**
  * Uses a quick flash LLM call to generate dynamic scene-setting options.
