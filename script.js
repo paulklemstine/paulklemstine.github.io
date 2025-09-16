@@ -868,46 +868,42 @@ async function initiateTurnAsPlayer1(turnData) {
  * A wrapper for the Gemini API call that includes retry logic and primary key fallback.
  */
 async function callGeminiApiWithRetry(prompt, responseMimeType = "application/json") {
-    // On each call, determine which API key to use.
     let apiKey = getPrimaryApiKey(); // Tries the default key first.
     if (!apiKey) {
-        // If the primary key has failed or doesn't exist, use the user's input.
         apiKey = apiKeyInput.value.trim();
     }
 
-    // If there's still no key, it means the primary failed and the user hasn't provided one.
     if (!apiKey) {
         showError("API Key is missing. Please enter your own key to continue.");
         throw new Error("API Key is missing.");
     }
 
-    let success = false;
-    let attempts = 0;
-    const maxAttempts = 3; // Retries for network errors, etc.
     let lastError = null;
 
-    while (!success && attempts < maxAttempts) {
-        attempts++;
-        const currentModel = AVAILABLE_MODELS[currentModelIndex];
-        console.log(`Attempt ${attempts}/${maxAttempts}: Trying model ${currentModel}`);
+    // New logic: Iterate through all available models.
+    for (let i = 0; i < AVAILABLE_MODELS.length; i++) {
+        const modelName = AVAILABLE_MODELS[i];
+        console.log(`Attempting API call with model: ${modelName}`);
         try {
-            const responseText = await callRealGeminiAPI(apiKey, prompt, currentModel, responseMimeType);
-            // If the call succeeds, we return the text.
+            // Attempt the call with the current model
+            const responseText = await callRealGeminiAPI(apiKey, prompt, modelName, responseMimeType);
+            // If it succeeds, return the response immediately.
+            console.log(`API call successful with model: ${modelName}`);
+            currentModelIndex = i; // Remember the last successful model
+            updateModelToggleVisuals(); // Update UI to reflect the working model
             return responseText;
-
         } catch (error) {
-            console.error(`Error with model ${currentModel} (Attempt ${attempts}):`, error);
-            lastError = error;
+            console.warn(`API call failed for model ${modelName}. Error:`, error.message);
+            lastError = error; // Store the last error
 
-            if (error.message && error.message.includes('503')) {
-                throw new Error("LLM service is currently overloaded (503). Please try again shortly.");
-            }
+            // If we've tried the last model and it failed, then we handle the final failure.
+            if (i === AVAILABLE_MODELS.length - 1) {
+                console.error("All available models have failed with the current API key.");
 
-            // Specifically check for a quota error (429) or invalid key error (400) and if it was the primary key that failed.
-            if (error.message && (error.message.includes('429') || error.message.includes('API_KEY_INVALID'))) {
+                // Check if it was the primary key that failed on all models
                 const primaryKey = getPrimaryApiKey();
-                if (primaryKey && apiKey === primaryKey) {
-                    console.warn("Primary API key has failed (invalid or quota). Switching to user input.");
+                if (primaryKey && apiKey === primaryKey && error.message && (error.message.includes('429') || error.message.includes('API_KEY_INVALID'))) {
+                    console.warn("Primary API key has failed on all models. Switching to user input.");
                     hasPrimaryApiKeyFailed = true;
 
                     // Update the UI to allow the user to enter their own key.
@@ -919,26 +915,22 @@ async function callGeminiApiWithRetry(prompt, responseMimeType = "application/js
                     // Remove the failed key from local storage to prevent auto-login with it on next refresh.
                     localStorage.removeItem('sparksync_apiKey');
 
-                    const userMessage = "The default API key is invalid or has expired. Please enter your own key to continue.";
+                    const userMessage = "The default API key is invalid or has expired on all available models. Please enter your own key to continue.";
                     showError(userMessage);
-
-                    // We must stop the current operation and wait for the user to act.
-                    // Throw a new error that will be caught by the calling function (e.g., initiateTurn).
-                    // This prevents the retry loop from continuing with the failed key.
+                    // Throw the specific error to be handled by the calling function.
                     throw new Error(userMessage);
                 }
-            }
 
-            // For any other kind of error, we can retry a few times.
-            if (attempts < maxAttempts) {
-                showError(`AI Error (Attempt ${attempts}). Retrying...`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                // For any other final error (e.g., network error on the last model, or user-provided key failing),
+                // just throw the last recorded error.
+                throw lastError;
             }
+            // Otherwise, the loop will just continue to the next model.
         }
     }
 
-    // If the loop finishes without success, throw the last error.
-    throw new Error(`Failed to get valid response from AI after ${maxAttempts} attempts. Last error: ${lastError?.message}`);
+    // This part should theoretically not be reached if the loop runs, but as a fallback:
+    throw new Error(`Failed to get valid response from AI. Last error: ${lastError?.message}`);
 }
 
 /** Calls the real Google AI (Gemini) API and logs the interaction for the debug panel. */
@@ -2577,9 +2569,15 @@ async function startNewDate(partnerId, iAmPlayer1) {
             startSceneSelection(dynamicOptions);
         } catch (error) {
             console.error("Error generating dynamic scene options:", error);
-            showError("Could not generate scene options. Please try starting a new date.");
-            // Fallback to static options on error
-            startSceneSelection(sceneFeatures);
+            // If the error is a key failure, the retry logic has already updated the UI.
+            // We just need to show the error and *not* fall back, halting the date.
+            if (error.message && (error.message.includes('The default API key is invalid') || error.message.includes('API Key is missing'))) {
+                showError(error.message);
+            } else {
+                // For other errors (e.g., network), fallback to static options is acceptable.
+                showError("Could not generate scene options. Falling back to defaults.");
+                startSceneSelection(sceneFeatures);
+            }
         } finally {
             if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'none';
         }
