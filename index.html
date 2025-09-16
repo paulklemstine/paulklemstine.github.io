@@ -102,39 +102,33 @@
 <!-- Minigame Modal -->
 <div id="minigame-modal" class="modal" style="display: none;">
     <div class="modal-content">
-        <h2 id="minigame-title" class="text-2xl font-bold text-center mb-2">Make a Move</h2>
-        <p id="minigame-subtitle" class="text-center text-gray-600 mb-4">Best 2 out of 3 wins!</p>
+        <h2 id="minigame-title" class="text-2xl font-bold text-center mb-4">Make a Move</h2>
 
-        <div id="minigame-scoreboard" class="flex justify-around mb-4 font-bold text-xl">
-            <div>You: <span id="player-score">0</span></div>
-            <div>Partner: <span id="partner-score">0</span></div>
-        </div>
-
-        <div id="minigame-round-result" class="text-center h-8 mb-4 font-semibold">
+        <div id="minigame-round-result" class="text-center h-12 mb-4 font-semibold">
             <!-- Round results will be shown here -->
         </div>
 
         <!-- Graphical result display -->
-        <div id="minigame-graphical-result" class="text-center mb-4 hidden">
-            <img id="result-image" src="" alt="Round outcome" class="mx-auto rounded-lg shadow-md mb-2" style="max-height: 200px;">
-            <p id="result-narrative" class="text-lg italic"></p>
+        <div id="minigame-graphical-result" class="text-center p-4 my-4 border rounded-lg bg-gray-50 hidden">
+            <img id="result-image" src="" alt="Round outcome" class="mx-auto rounded-lg shadow-md mb-3" style="max-height: 250px;">
+            <p id="result-narrative" class="text-base italic text-gray-700"></p>
         </div>
 
-        <div id="initiator-controls" class="hidden">
-            <p class="text-center mb-2 font-semibold">You are the Initiator. Make your move:</p>
-            <div class="flex justify-center gap-4">
-                <button id="initiator-kiss-button" class="geems-button minigame-button">Go for a Kiss</button>
-                <button id="initiator-hold-hands-button" class="geems-button minigame-button">Hold Hands</button>
+        <div id="initiator-controls" style="display: none;">
+            <p class="text-center mb-3 font-semibold text-gray-800">You are the Initiator. Make your move:</p>
+            <div class="flex justify-center flex-wrap gap-4">
+                <!-- Buttons will be dynamically added here -->
             </div>
         </div>
 
-        <div id="receiver-controls" class="hidden">
-            <p class="text-center mb-2 font-semibold">You are the Receiver. How do you respond?</p>
-            <div class="flex justify-center gap-4">
-                <button id="receiver-accept-button" class="geems-button minigame-button">Accept</button>
-                <button id="receiver-lean-away-button" class="geems-button minigame-button">Lean Away</button>
-                <button id="receiver-tease-button" class="geems-button minigame-button">Tease</button>
+        <div id="receiver-controls" style="display: none;">
+            <p class="text-center mb-3 font-semibold text-gray-800">You are the Receiver. How do you respond?</p>
+            <div class="flex justify-center flex-wrap gap-4">
+                <!-- Buttons will be dynamically added here -->
             </div>
+        </div>
+         <div class="mt-6 text-center">
+            <button onclick="endMinigame()" class="geems-button" id="end-minigame-btn">End Minigame</button>
         </div>
     </div>
 </div>

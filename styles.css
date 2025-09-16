@@ -723,9 +723,11 @@ body {
 
 /* --- Kissing Minigame --- */
 .minigame-button {
-    font-size: 1.5rem;
-    padding: 1rem 1.5rem;
+    font-size: 1rem; /* Adjusted for better fit */
+    padding: 0.75rem 1.25rem;
     transition: all 0.2s ease-in-out;
+    flex-grow: 1;
+    min-width: 120px; /* Ensure buttons have a minimum width */
 }
 
 .minigame-button:hover:not(:disabled) {
@@ -741,16 +743,15 @@ body {
     box-shadow: none;
 }
 
-#minigame-round-result.win {
-    color: #198754; /* Green */
+#minigame-round-result strong {
+    font-weight: 700;
 }
 
-#minigame-round-result.lose {
-    color: #dc3545; /* Red */
+#end-minigame-btn {
+    background-color: #6c757d; /* A more neutral gray */
 }
-
-#minigame-round-result.tie {
-    color: #6c757d; /* Gray */
+#end-minigame-btn:hover {
+    background-color: #5a6268;
 }
 
 /* --- Spinner Modal --- */

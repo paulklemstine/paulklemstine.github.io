@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, sceneFeatures, getDynamicSceneOptions, getMinigameActions, getMinigameRoundOutcome} from './prompts.js';
+import {geemsPrompts, sceneFeatures, getDynamicSceneOptions, getMinigameActions, getMinigameOutcome} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -30,13 +30,11 @@ const MIN_SPINNER_VELOCITY = 0.005;
 // --- Minigame State ---
 let minigameActive = false;
 let minigameCompletionCallback = null;
-let playerScore = 0;
-let partnerScore = 0;
 let playerMove = null;
 let partnerMove = null;
 let minigameRound = 1;
 let player1IsInitiator = true;
-let minigameActionData = null; // To hold LLM-generated actions and rules
+let minigameActionData = null; // To hold LLM-generated actions
 let preloadedMinigameData = null; // To preload the *next* turn's actions
 
 // --- Model Switching State ---
@@ -1847,14 +1845,17 @@ async function startMinigame(onComplete) {
     console.log("Starting 'Make a Move' Minigame...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
-    playerScore = 0;
-    partnerScore = 0;
     minigameRound = 1;
+    playerMove = null;
+    partnerMove = null;
     player1IsInitiator = true; // Player 1 always starts as the initiator
     minigameActionData = null; // Clear old data
     preloadedMinigameData = null; // Clear old data
 
     if (minigameModal) minigameModal.style.display = 'flex';
+    if (roundResultDisplay) roundResultDisplay.innerHTML = '';
+    if (graphicalResultDisplay) graphicalResultDisplay.classList.add('hidden');
+
 
     // Player 1 is responsible for generating and distributing the game data
     if (amIPlayer1) {
@@ -1875,19 +1876,18 @@ async function startMinigame(onComplete) {
                 resetRoundUI(); // Now we can setup the UI
             } else {
                 showError("Could not generate minigame actions. Closing minigame.");
-                setTimeout(() => minigameModal.style.display = 'none', 3000);
+                setTimeout(endMinigame, 3000);
             }
         } catch (error) {
             console.error("Error getting minigame actions:", error);
             showError("Failed to start minigame due to an API error.");
+            setTimeout(endMinigame, 3000);
         }
     } else {
         // Player 2 just waits for the data
         minigameTitle.textContent = "Partner is Generating Actions...";
         roundResultDisplay.textContent = "Waiting for partner to create the game...";
     }
-
-    updateScoreboard();
 }
 
 function handlePlayerMove(move) {
@@ -1917,78 +1917,78 @@ function checkForRoundCompletion() {
 
         console.log(`Round ${minigameRound} complete. Initiator: ${initiatorMove}, Receiver: ${receiverMove}`);
 
-        // --- New UI Feedback Logic ---
         const yourMoveText = playerMove.replace(/_/g, ' ');
         const partnerMoveText = partnerMove.replace(/_/g, ' ');
-        roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.`;
-        // --- End New UI Feedback Logic ---
+        roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.<br>Figuring out what happens...`;
 
         // Wait a moment before revealing the winner
         setTimeout(async () => {
-            const winnerRole = determineRoundWinner(initiatorMove, receiverMove);
-
-            // Dynamically get the outcome visualization
             try {
-                const outcome = await getMinigameRoundOutcome(initiatorMove, receiverMove, winnerRole, isDateExplicit, callGeminiApiWithRetry);
+                // The history provides context for the LLM's decision
+                const context = historyQueue.length > 0 ?
+                    JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
+                    : "It's the beginning of the date.";
+
+                const outcome = await getMinigameOutcome(initiatorMove, receiverMove, context, isDateExplicit, callGeminiApiWithRetry);
+
                 if (outcome && resultImage && resultNarrative && graphicalResultDisplay) {
+                    // Display the LLM's story
                     resultNarrative.textContent = outcome.narrative;
                     const randomSeed = Math.floor(Math.random() * 65536);
                     resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(outcome.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
                     graphicalResultDisplay.classList.remove('hidden');
+
+                    let roundMessage = "The outcome is a draw!";
+                     if (outcome.winner && outcome.winner !== 'draw') {
+                        const iAmWinner = (iAmInitiator && outcome.winner === 'initiator') || (!iAmInitiator && outcome.winner === 'receiver');
+                        if (iAmWinner) {
+                            roundMessage = "You won the moment!";
+                        } else {
+                            roundMessage = "Your partner won the moment.";
+                        }
+                    }
+                     roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>. <br><strong>${roundMessage}</strong>`;
+
+                } else {
+                     roundResultDisplay.innerHTML += `<br>Could not determine the outcome. Let's call it a draw.`;
                 }
-            } catch (e) {
-                console.error("Could not generate round outcome visualization:", e);
-            }
 
-
-            let roundMessage = "It's a draw this round!";
-            if (winnerRole && winnerRole !== 'draw') {
-                 const iAmWinner = (iAmInitiator && winnerRole === 'initiator') || (!iAmInitiator && winnerRole === 'receiver');
-                 if (iAmWinner) {
-                     playerScore++;
-                     roundMessage = "You won the round!";
-                 } else {
-                     partnerScore++;
-                     roundMessage = "Your partner won the round.";
-                 }
-            }
-
-            roundResultDisplay.innerHTML += `<br>${roundMessage}`;
-            updateScoreboard();
-
-            if (playerScore >= 2 || partnerScore >= 2) {
-                endMinigame();
-            } else {
+                 // Continue to the next round indefinitely
                 minigameRound++;
                 player1IsInitiator = !player1IsInitiator; // Swap roles
-                setTimeout(resetRoundUI, 5000); // Increased delay to show image
+                setTimeout(resetRoundUI, 8000); // Increased delay to show story and image
+
+
+            } catch (e) {
+                console.error("Could not generate round outcome:", e);
+                roundResultDisplay.innerHTML += `<br>An error occurred. Let's call it a draw and continue.`;
+                minigameRound++;
+                player1IsInitiator = !player1IsInitiator; // Swap roles
+                setTimeout(resetRoundUI, 5000);
             }
+
         }, 2500); // 2.5 second delay to show moves
     }
 }
 
-function determineRoundWinner(initiatorMove, receiverMove) {
-    if (!minigameActionData || !minigameActionData.rules) {
-        console.error("Cannot determine winner: minigameActionData.rules is not available.");
-        return 'draw'; // Fail safe to a draw
-    }
-    // Returns 'initiator', 'receiver', or 'draw'.
-    const winner = minigameActionData.rules[initiatorMove]?.[receiverMove];
-    return winner || 'draw'; // Default to draw if a rule is somehow missing
-}
 
 function endMinigame() {
     minigameActive = false;
-    const winner = playerScore > partnerScore ? 'player' : 'partner';
-    minigameSubtitle.textContent = `Game Over! You ${winner === 'player' ? 'WON!' : 'LOST!'}`;
     setMoveButtonsDisabled(true);
 
-    setTimeout(() => {
-        if (minigameModal) minigameModal.style.display = 'none';
-        if (minigameCompletionCallback) {
-            minigameCompletionCallback(winner);
-        }
-    }, 4000);
+    // Fade out and hide the modal
+    if (minigameModal) {
+        minigameModal.style.opacity = '0';
+        setTimeout(() => {
+            minigameModal.style.display = 'none';
+            minigameModal.style.opacity = '1'; // Reset for next time
+            if (minigameCompletionCallback) {
+                // In the new flow, there's no single "winner" of the whole game.
+                // We can pass a neutral value or decide on a convention.
+                minigameCompletionCallback('continue');
+            }
+        }, 500);
+    }
 }
 
 function resetRoundUI() {
@@ -2050,21 +2050,16 @@ function resetRoundUI() {
 
 
     if (iAmInitiator) {
-        roundResultDisplay.textContent = `Round ${minigameRound}: Make your move...`;
+        roundResultDisplay.textContent = `Round ${minigameRound}: You are the Initiator. Make your move...`;
         controlsDiv.style.display = 'block';
         otherControlsDiv.style.display = 'none';
     } else {
-        roundResultDisplay.textContent = `Round ${minigameRound}: Respond to your partner...`;
+        roundResultDisplay.textContent = `Round ${minigameRound}: You are the Receiver. Respond to your partner...`;
         controlsDiv.style.display = 'block';
         otherControlsDiv.style.display = 'none';
     }
 
     setMoveButtonsDisabled(false); // This function will now disable all buttons in both containers
-}
-
-function updateScoreboard() {
-    playerScoreDisplay.textContent = playerScore;
-    partnerScoreDisplay.textContent = partnerScore;
 }
 
 function setMoveButtonsDisabled(disabled) {
