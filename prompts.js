@@ -171,30 +171,24 @@ Example for a non-explicit theme:
 }
 
 /**
- * Generates a set of actions and rules for the "Make a Move" minigame.
+ * Generates a set of actions for the "Make a Move" minigame.
  * @param {boolean} isExplicit - Whether the theme is SFW or NSFW.
  * @param {Function} llmApiCall - The function to call the Gemini API.
  * @returns {Promise<object>} A promise that resolves to the minigame data.
  */
 export async function getMinigameActions(isExplicit, llmApiCall) {
     const theme = isExplicit
-        ? "a tense, intimate, and sexually charged moment between two people on a date"
+        ? "an intense, intimate, and explicitly sexual moment between two people on a date. The actions should be daring and provocative."
         : "a cute, slightly awkward, romantic moment between two people on a date";
 
-    const prompt = `You are a game designer creating a rock-paper-scissors style minigame about physical intimacy on a date. The theme is: ${theme}.
+    const prompt = `You are a game designer creating actions for a minigame about physical intimacy on a date. The theme is: ${theme}.
 
-You must generate a set of actions for an "Initiator" and a "Receiver", and the rules that govern them.
+You must generate a set of actions for an "Initiator" and a "Receiver".
 
 1.  **Actions:**
     *   Generate a list of 8 unique, creative actions for the 'initiator'.
     *   Generate a list of 8 unique, creative actions for the 'receiver'.
     *   Actions should be short phrases (2-4 words). Use snake_case for the values (e.g., "go_for_a_kiss").
-
-2.  **Ruleset:**
-    *   Create a JSON object called 'rules' that defines the outcome of every possible Initiator vs. Receiver action pair.
-    *   For each initiator action, define the outcome against each receiver action.
-    *   The outcome can be 'initiator' (Initiator wins), 'receiver' (Receiver wins), or 'draw' (It's a tie).
-    *   The logic should be creative and psychological. A bold move might beat a hesitant one, but a clever, defensive move could beat a bold one.
 
 **Output Format:**
 Return ONLY a single, valid JSON object. Do not include any other text or markdown.
@@ -202,15 +196,7 @@ Return ONLY a single, valid JSON object. Do not include any other text or markdo
 The final JSON object MUST have this exact structure:
 {
   "initiator_actions": ["action_one", "action_two", ...],
-  "receiver_actions": ["response_one", "response_two", ...],
-  "rules": {
-    "action_one": {
-      "response_one": "initiator",
-      "response_two": "receiver",
-      ...
-    },
-    ...
-  }
+  "receiver_actions": ["response_one", "response_two", ...]
 }
 `;
 
@@ -219,7 +205,7 @@ The final JSON object MUST have this exact structure:
         const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
         const gameData = JSON.parse(responseJson);
         // Add validation here if needed
-        console.log("Successfully fetched dynamic minigame actions and rules:", gameData);
+        console.log("Successfully fetched dynamic minigame actions:", gameData);
         return gameData;
     } catch (error) {
         console.error("Failed to get dynamic minigame actions from LLM:", error);
@@ -228,45 +214,51 @@ The final JSON object MUST have this exact structure:
 }
 
 /**
- * Generates the narrative and image prompt for a specific minigame round outcome.
+ * Generates the narrative, winner, and image prompt for a minigame round.
  * @param {string} initiatorMove - The action the initiator took (e.g., "go_for_a_kiss").
  * @param {string} receiverMove - The action the receiver took (e.g., "accept").
- * @param {string} winner - The result of the round ('initiator', 'receiver', or 'draw').
+ * @param {string} context - A brief summary of the date so far.
  * @param {boolean} isExplicit - Whether the theme is SFW or NSFW.
  * @param {Function} llmApiCall - The function to call the Gemini API.
- * @returns {Promise<object|null>} A promise that resolves to an object with {narrative, image_prompt} or null.
+ * @returns {Promise<object|null>} A promise that resolves to an object with {narrative, image_prompt, winner}.
  */
-export async function getMinigameRoundOutcome(initiatorMove, receiverMove, winner, isExplicit, llmApiCall) {
+export async function getMinigameOutcome(initiatorMove, receiverMove, context, isExplicit, llmApiCall) {
      const theme = isExplicit
-        ? "a tense, intimate, and sexually charged moment between two people on a date"
+        ? "an intense, intimate, and explicitly sexual moment between two people on a date. The narrative should be descriptive and passionate."
         : "a cute, slightly awkward, romantic moment between two people on a date";
 
-    const prompt = `You are a creative writer describing a moment in a date. The theme is: ${theme}.
+    const prompt = `You are a creative writer and game referee describing a moment in a date.
+The theme is: ${theme}.
+The context of the date so far is: "${context}"
+
 An "Initiator" took the action "${initiatorMove.replace(/_/g, ' ')}".
 A "Receiver" responded with the action "${receiverMove.replace(/_/g, ' ')}".
-The result of this interaction was a win for the: ${winner}.
 
-Based on this, generate a short narrative and an image prompt.
+Based on the actions and the context, you must decide who "wins" the interaction. The winner could be the 'initiator', the 'receiver', or it could be a 'draw'. Your decision should be creative and psychological. A bold move might beat a hesitant one, but a clever, defensive move could also win.
+
+Then, generate a short narrative and an image prompt based on your decision.
 
 **Output Format:**
-Return ONLY a single, valid JSON object with two keys: "narrative" and "image_prompt".
-- "narrative": A 1-2 sentence story describing what happens in this moment.
+Return ONLY a single, valid JSON object with three keys: "winner", "narrative", and "image_prompt".
+- "winner": Your decision for who won the round ('initiator', 'receiver', or 'draw').
+- "narrative": A 1-3 sentence story describing what happens and WHY you chose the winner. Explain the psychology of the interaction.
 - "image_prompt": A detailed Pollinations.ai prompt to visually represent the narrative. Use a "cinematic anime" style.
 
 Example:
 {
-  "narrative": "She leans in, and for a moment, the world stills. He meets her halfway, a soft touch that promises more.",
-  "image_prompt": "cinematic anime, close-up, a man and a woman about to kiss, tender, romantic, soft lighting, detailed hair and eyes"
+  "winner": "initiator",
+  "narrative": "He confidently went for the kiss, and she met him halfway. His boldness paid off, creating a spark of mutual excitement. It's a clear win for the initiator, who took a risk and was rewarded.",
+  "image_prompt": "cinematic anime, close-up, a man and a woman about to kiss, tender, romantic, soft lighting, detailed hair and eyes, a sense of happy surprise"
 }
 `;
 
     try {
         const responseJson = await llmApiCall(prompt, "application/json", "gemini-1.5-flash-latest");
         const outcomeData = JSON.parse(responseJson);
-        console.log("Successfully fetched round outcome:", outcomeData);
+        console.log("Successfully fetched minigame outcome:", outcomeData);
         return outcomeData;
     } catch (error) {
-        console.error("Failed to get minigame round outcome from LLM:", error);
+        console.error("Failed to get minigame outcome from LLM:", error);
         return null;
     }
 }
