@@ -621,7 +621,6 @@ function renderInterstitialReports() {
     document.getElementById('local-clinical-report').innerHTML = (localPlayerAnalysis?.clinical_profile || '<em>Analysis pending...</em>').replace(/\\n/g, '<br>');
 
     // Populate the 'Partner' column
-    // For the partner, we are displaying *their* green flags about *us*
     document.getElementById('partner-green-flags').innerHTML = partnerPlayerAnalysis?.green_flags || '<em>Analysis pending...</em>';
     document.getElementById('partner-red-flags').innerHTML = partnerPlayerAnalysis?.red_flags || '<em>Analysis pending...</em>';
     document.getElementById('partner-clinical-report').innerHTML = (partnerPlayerAnalysis?.clinical_profile || '<em>Analysis pending...</em>').replace(/\\n/g, '<br>');
@@ -633,68 +632,71 @@ function renderInterstitialReports() {
 
 /**
  * Checks if both local and partner analysis are ready, then renders them.
+ * This function is now ONLY responsible for rendering the report text.
+ * It does not enable the continue button anymore.
  */
 function checkAndRenderInterstitial() {
     if (localPlayerAnalysis && partnerPlayerAnalysis) {
-        console.log("Both local and partner analyses are ready. Rendering.");
+        console.log("Both local and partner analyses are ready. Rendering reports.");
         const interstitialTitle = document.querySelector('#interstitial-screen h2');
         if (interstitialTitle) interstitialTitle.textContent = "Dr. Gemini's Report";
 
         renderInterstitialReports();
-        interstitialContinueButton.disabled = false;
+        checkIfReadyToContinue(); // Check if we can proceed
     } else {
         console.log("Still waiting for all analysis data.", { hasLocal: !!localPlayerAnalysis, hasPartner: !!partnerPlayerAnalysis });
-        // Optionally update a status message here
+    }
+}
+
+/**
+ * Checks if all data (analyses and next turn UI) is ready to proceed.
+ * If so, it enables the continue button on the interstitial screen.
+ */
+function checkIfReadyToContinue() {
+    const analysisReady = !!localPlayerAnalysis && (isDateActive ? !!partnerPlayerAnalysis : true);
+    const nextTurnUiReady = !!bufferedNextTurnUi && (isDateActive ? partnerFinishedBuffering : true);
+
+    console.log("Checking if ready to continue...", { analysisReady, nextTurnUiReady });
+
+    if (analysisReady && nextTurnUiReady) {
+        console.log("All data is ready. Enabling continue button.");
+        interstitialContinueButton.disabled = false;
     }
 }
 
 
 /**
  * Generates the UI for the current player by calling the main UI generator prompt.
- * This is called by both players after receiving the orchestrator's plan.
+ * This function is now a utility that returns the UI JSON without rendering it.
  * @param {string} orchestratorText - The full plain text output from the orchestrator.
  * @param {string} playerRole - Either 'player1' or 'player2'.
+ * @returns {Promise<object>} A promise that resolves to the UI JSON object.
  */
 async function generateLocalTurn(orchestratorText, playerRole) {
     console.log(`Generating local turn UI for ${playerRole}...`);
 
-    try {
-        const parts = orchestratorText.split('---|||---');
-        if (parts.length !== 3) {
-            throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
-        }
-
-        const playerNumber = (playerRole === 'player1') ? 1 : 2;
-        const instructions = parts[playerNumber];
-
-        const prompt = geemsPrompts.master_ui_prompt + "\n\n" + instructions;
-        const uiJsonString = await callGeminiApiWithRetry(prompt);
-        let uiJson = JSON.parse(uiJsonString);
-
-        if (!Array.isArray(uiJson) && typeof uiJson === 'object' && uiJson !== null) {
-            const arrayKey = Object.keys(uiJson).find(key => Array.isArray(uiJson[key]));
-            if (arrayKey) {
-                console.warn(`API returned an object. Found an array at key: '${arrayKey}'`);
-                uiJson = uiJson[arrayKey];
-            }
-        }
-
-        currentUiJson = uiJson;
-        renderUI(currentUiJson);
-        playTurnAlertSound();
-        console.log(`Finished generating UI for ${playerRole}.`);
-        return true; // Indicate success
-
-    } catch (error) {
-        console.error(`Error during local turn generation for ${playerRole}:`, error);
-        showError("Failed to generate your turn's UI. Please try again.");
-        interstitialScreen.style.display = 'none';
-        setLoading(false); // Make sure user is not stuck on error
-        return false; // Indicate failure
+    const parts = orchestratorText.split('---|||---');
+    if (parts.length !== 3) {
+        throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
     }
+
+    const playerNumber = (playerRole === 'player1') ? 1 : 2;
+    const instructions = parts[playerNumber];
+
+    const prompt = geemsPrompts.master_ui_prompt + "\n\n" + instructions;
+    const uiJsonString = await callGeminiApiWithRetry(prompt);
+    let uiJson = JSON.parse(uiJsonString);
+
+    if (!Array.isArray(uiJson) && typeof uiJson === 'object' && uiJson !== null) {
+        const arrayKey = Object.keys(uiJson).find(key => Array.isArray(uiJson[key]));
+        if (arrayKey) {
+            console.warn(`API returned an object. Found an array at key: '${arrayKey}'`);
+            uiJson = uiJson[arrayKey];
+        }
+    }
+    console.log(`Finished generating UI for ${playerRole}.`);
+    return uiJson; // Return the JSON
 }
-
-
 
 function renderDebugPanel() {
     if (!debugLogsContainer) return;
@@ -711,7 +713,6 @@ function renderDebugPanel() {
 
         const summary = document.createElement('summary');
         const title = document.createElement('span');
-        // Use toLocaleTimeString for readability
         title.textContent = `[${log.timestamp.toLocaleTimeString()}] ${log.model}`;
         if (log.isError) {
             title.style.color = '#dc3545'; // Red for errors
@@ -725,7 +726,6 @@ function renderDebugPanel() {
         const content = document.createElement('div');
         content.className = 'debug-log-content';
 
-        // Use a helper to safely display content
         const escapeHtml = (unsafe) => {
             if (unsafe === null || unsafe === undefined) return '';
             return unsafe.toString()
@@ -767,45 +767,46 @@ function checkForTurnCompletion() {
 
     startMinigame((winner) => {
         if (amIPlayer1) {
-        const myRoomId = MPLib.getLocalRoomId();
-        const partnerRoomId = roomConnections.keys().next().value;
-        const playerA_actions = turnSubmissions.get(myRoomId);
-        const playerB_actions = turnSubmissions.get(partnerRoomId);
+            const myRoomId = MPLib.getLocalRoomId();
+            const partnerRoomId = roomConnections.keys().next().value;
+            const playerA_actions = turnSubmissions.get(myRoomId);
+            const playerB_actions = turnSubmissions.get(partnerRoomId);
 
-        if (!playerA_actions || !playerB_actions) {
-            showError("FATAL: Could not map submissions to players. Aborting turn.");
-            if (spinnerModal) spinnerModal.style.display = 'none'; // Hide spinner on error
+            if (!playerA_actions || !playerB_actions) {
+                showError("FATAL: Could not map submissions to players. Aborting turn.");
+                if (spinnerModal) spinnerModal.style.display = 'none';
+                turnSubmissions.clear();
+                return;
+            }
+
+            initiateTurnAsPlayer1({
+                playerA_actions: playerA_actions,
+                playerB_actions: playerB_actions,
+                playerA_notes: JSON.parse(playerA_actions.notes || '{}'),
+                playerB_notes: JSON.parse(playerB_actions.notes || '{}'),
+                isExplicit: isDateExplicit,
+                history: historyQueue,
+                minigameWinner: winner
+            });
+
             turnSubmissions.clear();
-            return;
+        } else {
+            console.log("I am Player 2. My work is done for this turn, waiting for P1.");
+            turnSubmissions.clear();
         }
-
-        initiateTurnAsPlayer1({
-            playerA_actions: playerA_actions,
-            playerB_actions: playerB_actions,
-            playerA_notes: JSON.parse(playerA_actions.notes || '{}'),
-            playerB_notes: JSON.parse(playerB_actions.notes || '{}'),
-            isExplicit: isDateExplicit,
-            history: historyQueue,
-            minigameWinner: winner
-        });
-
-        turnSubmissions.clear();
-    } else {
-        // Player 2's work is done, they just wait for the next turn from P1.
-        console.log("I am Player 2. My work is done for this turn, waiting for P1.");
-        turnSubmissions.clear();
-    }
-});
+    });
 }
 
-async function initiateSinglePlayerTurn(turnData, history = []) {
-    console.log("Initiating single-player turn...");
-    setLoading(true); // Show interstitial for single player too
-
+/**
+ * Initiates the generation of the *next* turn's UI for a single player.
+ * This runs in the background while the player views the analysis of the current turn.
+ */
+async function initiateTurnGenerationSinglePlayer(playerActions, history) {
+    console.log("Initiating single-player NEXT turn generation...");
     try {
-        const parsedNotes = JSON.parse(turnData.notes || '{}');
+        const parsedNotes = JSON.parse(playerActions.notes || '{}');
         const orchestratorTurnData = {
-            playerA_actions: turnData, playerB_actions: turnData,
+            playerA_actions: playerActions, playerB_actions: playerActions,
             playerA_notes: parsedNotes, playerB_notes: parsedNotes,
             isExplicit: isExplicitMode, history: history
         };
@@ -814,68 +815,48 @@ async function initiateSinglePlayerTurn(turnData, history = []) {
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
         currentOrchestratorText = orchestratorText;
 
-        // In single player, we run UI and analysis generation sequentially.
-        const uiSuccess = await generateLocalTurn(orchestratorText, 'player1');
-        if (!uiSuccess) throw new Error("UI generation failed.");
+        bufferedNextTurnUi = await generateLocalTurn(orchestratorText, 'player1');
 
-        const analysis = await generatePlayerAnalysis(turnData, parsedNotes, history);
-
-        // For single player, both reports are the same.
-        localPlayerAnalysis = analysis;
-        partnerPlayerAnalysis = analysis; // Show the same report in both columns
-        checkAndRenderInterstitial();
+        console.log("Single player next turn UI buffered.");
+        checkIfReadyToContinue();
 
     } catch (error) {
         console.error("Error during single-player turn generation:", error);
-        showError("Failed to generate the next turn. Please try again.");
-        interstitialScreen.style.display = 'none';
-        setLoading(false);
+        showError("Failed to generate the next turn. You may be stuck.");
     }
 }
 
 /**
- * Kicks off the turn generation process. Called only by Player 1.
+ * Kicks off the next turn generation process. Called only by Player 1.
  * This function makes the 'orchestrator' call and distributes the plan.
+ * It does NOT handle analysis, only UI generation for the next turn.
  */
 async function initiateTurnAsPlayer1(turnData) {
-    console.log("Player 1 is initiating the turn...");
-    setLoading(true); // Show interstitial screen
+    console.log("Player 1 is initiating NEXT turn generation...");
 
     try {
         const orchestratorPrompt = constructPrompt('orchestrator', turnData);
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
         currentOrchestratorText = orchestratorText;
 
-        // Immediately send the plan to Player 2
         MPLib.sendDirectToRoomPeer(currentPartnerId, {
             type: 'orchestrator_output',
-            payload: { orchestratorText, turnData: turnData } // Send turnData for P2's analysis call
+            payload: { orchestratorText }
         });
 
-        // Player 1 starts their own parallel generation
-        const [uiResult, analysisResult] = await Promise.all([
-            generateLocalTurn(orchestratorText, 'player1'),
-            generatePlayerAnalysis(turnData.playerA_actions, turnData.playerA_notes, historyQueue)
-        ]);
+        bufferedNextTurnUi = await generateLocalTurn(orchestratorText, 'player1');
+        console.log("P1 has buffered the next turn UI.");
 
-        if (!uiResult || !analysisResult) {
-            throw new Error("One of the generation promises failed for Player 1.");
-        }
-
-        localPlayerAnalysis = analysisResult;
-        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
-        checkAndRenderInterstitial();
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'next_turn_buffered' });
+        checkIfReadyToContinue();
 
     } catch (error) {
         console.error("Error during Player 1's turn initiation:", error);
         showError("Failed to start the next turn due to an AI error.");
-        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'llm_overloaded' });
-        interstitialScreen.style.display = 'none';
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'generation_error', payload: { message: "Partner failed to generate the next turn." }});
         setLoading(false);
     }
 }
-
-
 
 /**
  * A wrapper for the Gemini API call that includes retry logic and primary key fallback.
@@ -2134,20 +2115,16 @@ function handleRoomDataReceived(senderId, data) {
             break;
 
         case 'spinner_state_update':
-            // This is now handled by a dedicated function for clarity
             if (data.payload && data.payload.spinners) {
                 handleSpinnerStateUpdate(data.payload.spinners);
             }
             break;
-        // The 'spinner_result' case is now obsolete, as the final result is
-        // part of the continuous state update. P1 calls endSpinner directly,
-        // and P2 calls it when all spinners stop spinning in the state update.
 
         case 'minigame_data':
             if (minigameActive && !amIPlayer1) {
                 minigameActionData = data.payload;
                 console.log("Received minigame data from Player 1.", minigameActionData);
-                resetRoundUI(); // Now that we have data, setup the UI
+                resetRoundUI();
             }
             break;
 
@@ -2174,48 +2151,31 @@ function handleRoomDataReceived(senderId, data) {
         case 'turn_submission':
             console.log(`Received turn submission from ${senderId.slice(-6)}`);
             if (isDateActive) {
-                // The payload is already a JS object, no need to parse it again.
                 const actions = data.payload;
-                // Use the room ID as the key
                 turnSubmissions.set(senderId, actions);
                 checkForTurnCompletion();
             }
             break;
 
-        case 'new_turn_ui':
-            console.log(`Received new turn UI from ${senderId}`);
-            if (isDateActive && !amIPlayer1) {
-                currentUiJson = data.payload;
-                renderUI(currentUiJson);
-                playTurnAlertSound();
-                submitButton.disabled = false;
-                setLoading(false, true);
-            }
-            break;
         case 'orchestrator_output':
             console.log(`Received orchestrator output from ${senderId.slice(-6)}`);
             if (isDateActive && !amIPlayer1) {
-                const { orchestratorText, turnData } = data.payload;
+                const { orchestratorText } = data.payload;
                 currentOrchestratorText = orchestratorText;
 
-                // Player 2 starts their own parallel generation
-                Promise.all([
-                    generateLocalTurn(orchestratorText, 'player2'),
-                    generatePlayerAnalysis(turnData.playerB_actions, turnData.playerB_notes, historyQueue)
-                ]).then(([uiResult, analysisResult]) => {
-                    if (!uiResult || !analysisResult) {
-                        throw new Error("One of the generation promises failed for Player 2.");
-                    }
-                    localPlayerAnalysis = analysisResult;
-                    // Send our analysis back to Player 1
-                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
-                    checkAndRenderInterstitial();
-                }).catch(error => {
-                     console.error("Error during Player 2's turn generation:", error);
-                     showError("Failed to generate your turn due to an AI error.");
-                     interstitialScreen.style.display = 'none';
-                     setLoading(false);
-                });
+                // Player 2 generates their UI and buffers it
+                generateLocalTurn(orchestratorText, 'player2')
+                    .then(uiJson => {
+                        bufferedNextTurnUi = uiJson;
+                        console.log("P2 has buffered the next turn UI.");
+                        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'next_turn_buffered' });
+                        checkIfReadyToContinue();
+                    })
+                    .catch(error => {
+                        console.error("Error during Player 2's turn generation:", error);
+                        showError("Failed to generate your turn due to an AI error from your partner.");
+                        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'generation_error', payload: { message: "Partner failed to generate their turn." }});
+                    });
             }
             break;
 
@@ -2225,9 +2185,20 @@ function handleRoomDataReceived(senderId, data) {
             checkAndRenderInterstitial();
             break;
 
+        case 'next_turn_buffered':
+            console.log(`Partner ${senderId.slice(-6)} has finished buffering their next turn.`);
+            partnerFinishedBuffering = true;
+            checkIfReadyToContinue();
+            break;
+
+        case 'generation_error':
+            console.error("Received a generation error from partner:", data.payload.message);
+            showError(data.payload.message);
+            setLoading(false); // Unlock the UI
+            break;
+
         case 'profile_update':
             console.log(`Received profile update from ${senderId.slice(-6)}`, data.payload);
-            // Use the Master ID for storage to keep it consistent
             const masterId = MPLib.getRoomConnections().get(senderId)?.metadata?.masterId || senderId;
             if (!remoteGameStates.has(masterId)) {
                 remoteGameStates.set(masterId, {});
@@ -2235,23 +2206,12 @@ function handleRoomDataReceived(senderId, data) {
             remoteGameStates.get(masterId).profile = data.payload;
             console.log(`Updated remote profile for ${masterId.slice(-6)}`);
 
-            // Re-render the lobby if it's currently being viewed to show updates live.
             if (lobbyContainer.style.display === 'block') {
                 renderLobby();
             }
             break;
-        case 'new_turn_ui':
-            console.log(`Received new turn UI from ${senderId}`);
-            if (isDateActive && !amIPlayer1) {
-                currentUiJson = data.payload;
-                renderUI(currentUiJson);
-                playTurnAlertSound();
-                submitButton.disabled = false;
-                setLoading(false, true);
-            }
-            break;
+
         case 'scene_options':
-            // Player 2 receives the options from Player 1
             if (!amIPlayer1) {
                 console.log("Received scene options from Player 1:", data.payload);
                 startSceneSelection(data.payload);
@@ -2259,14 +2219,12 @@ function handleRoomDataReceived(senderId, data) {
             break;
         case 'graceful_disconnect':
             console.log(`Received graceful disconnect from ${senderId.slice(-6)}`);
-            // Manually close the connection. The 'onclose' handler in MPLib
-            // will then trigger the onRoomPeerLeft callback, which handles UI updates.
             MPLib.closeConnection(senderId);
             break;
         case 'llm_overloaded':
             console.log("Received LLM overloaded message from partner.");
             showError("The AI is currently overloaded. Please wait a moment and resubmit your turn.");
-            setLoading(false); // This will re-enable the submit button and hide loading indicators.
+            setLoading(false);
             break;
         default:
             console.warn(`Received unknown message type '${data.type}' from ${senderId.slice(-6)}`);
@@ -2284,13 +2242,13 @@ function handleError(type, error) {
 // --- UI Rendering ---
 
 function renderGlobalRoomList() {
-    if (isDateActive) return; // Do not render the room list if a date is active
+    if (isDateActive) return;
     const roomListContainer = document.getElementById('room-list');
     const directoryContainer = document.getElementById('global-directory-container');
     if (!roomListContainer || !directoryContainer) return;
 
-    directoryContainer.style.display = 'block'; // Make sure the whole section is visible
-    roomListContainer.innerHTML = ''; // Clear old list
+    directoryContainer.style.display = 'block';
+    roomListContainer.innerHTML = '';
 
     const { rooms } = globalRoomDirectory;
 
@@ -2299,7 +2257,6 @@ function renderGlobalRoomList() {
         return;
     }
 
-    // Sort rooms by name for a consistent order
     const sortedRoomNames = Object.keys(rooms).sort();
 
     sortedRoomNames.forEach(roomName => {
@@ -2336,52 +2293,60 @@ function renderGlobalRoomList() {
 
 // --- Event Listeners ---
 
-// Modify the original click listener
 submitButton.addEventListener('click', () => {
     if (isLoading) return;
-    submitButton.disabled = true; // Prevent double-clicks
+    setLoading(true); // Show interstitial screen immediately, disable all inputs
 
-    // --- Single source of truth for actions ---
     const playerActionsJson = collectInputState();
-    updateHistoryQueue(playerActionsJson); // <-- BUG FIX: Actually update the history
+    updateHistoryQueue(playerActionsJson);
     const playerActions = JSON.parse(playerActionsJson);
-    updateLocalProfileFromTurn(playerActions); // Update profile regardless of mode
+    updateLocalProfileFromTurn(playerActions);
+
+    // --- Start Analysis of THIS turn in the background ---
+    generatePlayerAnalysis(playerActions, JSON.parse(playerActions.notes || '{}'), historyQueue)
+        .then(analysis => {
+            if (analysis) {
+                localPlayerAnalysis = analysis;
+                if (isDateActive) {
+                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
+                } else {
+                    // In single player, partner's analysis is the same as local
+                    partnerPlayerAnalysis = analysis;
+                }
+                checkAndRenderInterstitial();
+            }
+        })
+        .catch(error => {
+            console.error("Analysis generation failed:", error);
+            showError("Dr. Gemini's analysis failed. You can continue when the next turn is ready.");
+            localPlayerAnalysis = { error: "Failed to generate." };
+            if (isDateActive) {
+                 MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'analysis_swap', payload: localPlayerAnalysis });
+            } else {
+                 partnerPlayerAnalysis = { error: "Failed to generate." };
+            }
+            checkAndRenderInterstitial();
+        });
 
 
     if (isDateActive) {
-        // --- Symmetrical Two-Player Date Logic ---
+        // --- Submit THIS turn's actions to partner to trigger NEXT turn's generation ---
         const myRoomId = MPLib.getLocalRoomId();
-
         if (myRoomId) {
             turnSubmissions.set(myRoomId, playerActions);
             console.log(`Locally recorded submission for ${myRoomId.slice(-6)}`);
+            MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
+            checkForTurnCompletion();
         } else {
             console.error("Could not get local room ID to record submission.");
-            submitButton.disabled = false;
+            setLoading(false);
             showError("A local error occurred. Could not submit turn.");
-            return;
         }
-
-        const loadingText = document.getElementById('loading-text');
-        if (loadingText) {
-            loadingText.textContent = 'Waiting for partner...';
-        }
-        setLoading(true, true);
-
-        showNotification("Actions submitted. Waiting for partner to submit...", "info");
-
-        // Broadcast actions to everyone in the room.
-        MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
-
-        checkForTurnCompletion();
-
     } else {
-        // --- Single-Player Logic ---
-        console.log("Submit button clicked (single-player mode).");
-        initiateSinglePlayerTurn(playerActions, historyQueue);
+        // --- Single-Player: Start NEXT turn generation in the background ---
+        initiateTurnGenerationSinglePlayer(playerActions, historyQueue);
     }
 });
-// --- MODIFICATION END: Long Press Logic ---
 
 
 apiKeyInput.addEventListener('input', () => {
@@ -2409,15 +2374,12 @@ resetGameButton.addEventListener('click', () => {
     if (isLoading || resetGameButton.disabled) return;
     if (confirm('Reset game? This will clear local progress. Are you sure?')) {
         console.log("Resetting game state...");
-        // Clear all relevant local storage items
         localStorage.removeItem(LOCAL_STORAGE_KEY);
         localStorage.removeItem('sparksync_apiKey');
-        localStorage.removeItem(LOCAL_PROFILE_KEY); // Also delete the user's profile
+        localStorage.removeItem(LOCAL_PROFILE_KEY);
         localStorage.removeItem('sparksync_hivemind');
         localStorage.removeItem('sparksync_lastLobby');
         console.log("Cleared localStorage, including user profile.");
-
-        // Reload the page to go back to the lobby selection
         window.location.reload();
     }
 });
@@ -2443,10 +2405,8 @@ function renderLobby() {
     const localMasterId = MPLib.getLocalMasterId();
     const localProfile = getLocalProfile();
 
-    // Create a list of all players to render, including the local player
     const playersToRender = [];
 
-    // Add the local player
     if (localMasterId) {
         playersToRender.push({
             id: localMasterId,
@@ -2455,22 +2415,21 @@ function renderLobby() {
         });
     }
 
-    // Add remote players
     const remotePeers = MPLib.getRoomConnections ? Array.from(MPLib.getRoomConnections().values()) : [];
     remotePeers.forEach(conn => {
         if (conn && conn.open) {
-            const peerMasterId = conn.metadata?.masterId || conn.peer; // Fallback to room ID
+            const peerMasterId = conn.metadata?.masterId || conn.peer;
             const remoteState = remoteGameStates.get(peerMasterId) || {};
             playersToRender.push({
                 id: peerMasterId,
                 profile: remoteState.profile || { name: `User-${peerMasterId.slice(-4)}`, gender: "Unknown", physical: {} },
                 isLocal: false,
-                roomConnection: conn // Pass the connection for the button
+                roomConnection: conn
             });
         }
     });
 
-    if (playersToRender.length <= 1) { // Only local player is here
+    if (playersToRender.length <= 1) {
         grid.innerHTML = '<p>No other users are currently online. Please wait for someone to connect.</p>';
     } else {
         playersToRender.forEach(player => {
@@ -2503,7 +2462,7 @@ function renderLobby() {
             if (!player.isLocal) {
                 const button = document.createElement('button');
                 button.className = 'geems-button propose-date-button';
-                button.dataset.masterId = player.id; // Store the persistent masterId
+                button.dataset.masterId = player.id;
 
                 if (player.roomConnection && player.roomConnection.open) {
                     button.textContent = 'Propose Date';
@@ -2511,7 +2470,6 @@ function renderLobby() {
                     button.onclick = (event) => {
                         const targetMasterId = event.target.dataset.masterId;
 
-                        // Find the correct room connection using the masterId
                         const connections = MPLib.getRoomConnections();
                         let targetRoomId = null;
                         for (const [roomId, conn] of connections.entries()) {
@@ -2559,7 +2517,6 @@ function showProposalModal() {
     const proposerProfile = remoteGameStates.get(proposerMasterId)?.profile;
     proposerName.textContent = proposerProfile?.name || `User-${incomingProposal.proposerId.slice(-4)}`;
 
-    // Use .onclick to easily overwrite previous listeners
     proposalAcceptButton.onclick = () => {
         if (!incomingProposal) return;
         console.log(`Accepting date from ${incomingProposal.proposerId}`);
@@ -2569,12 +2526,11 @@ function showProposalModal() {
         MPLib.sendDirectToRoomPeer(incomingProposal.proposerId, { type: 'date_accepted', payload: payload });
         proposalModal.style.display = 'none';
 
-        // Determine if the date is explicit
         isDateExplicit = isExplicitMode && incomingProposal.proposerExplicitMode;
         console.log(`Date explicit mode set to: ${isDateExplicit}`);
 
-        startNewDate(incomingProposal.proposerId, false); // We are Player 2 (receiver)
-        incomingProposal = null; // Clear the stored proposal
+        startNewDate(incomingProposal.proposerId, false);
+        incomingProposal = null;
     };
 
     proposalDeclineButton.onclick = () => {
@@ -2582,12 +2538,12 @@ function showProposalModal() {
         console.log(`Declining date from ${incomingProposal.proposerId}`);
         MPLib.sendDirectToRoomPeer(incomingProposal.proposerId, { type: 'date_declined' });
         proposalModal.style.display = 'none';
-        incomingProposal = null; // Clear the stored proposal
+        incomingProposal = null;
     };
 
     proposalModal.style.display = 'flex';
 }
-window.showProposalModal = showProposalModal; // Expose for testing
+window.showProposalModal = showProposalModal;
 
 /** Transitions from lobby to game view and initializes date state */
 async function startNewDate(partnerId, iAmPlayer1) {
@@ -2599,31 +2555,25 @@ async function startNewDate(partnerId, iAmPlayer1) {
     turnSubmissions.clear();
     sceneSelections.clear();
 
-    // Hide lobby, show game
     const directoryContainer = document.getElementById('global-directory-container');
     if(directoryContainer) directoryContainer.style.display = 'none';
     if(lobbyContainer) lobbyContainer.style.display = 'none';
     if(gameWrapper) gameWrapper.style.display = 'block';
 
-    // Player 1 generates the scene options and shows a loading modal.
-    // Player 2 just waits.
     if (amIPlayer1) {
         if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'flex';
         try {
             const dynamicOptions = await getDynamicSceneOptions(isDateExplicit, callGeminiApiWithRetry);
-            // When P1 is done, they broadcast the options to P2.
             MPLib.broadcastToRoom({ type: 'scene_options', payload: dynamicOptions });
             startSceneSelection(dynamicOptions);
         } catch (error) {
             console.error("Error generating dynamic scene options:", error);
             showError("Could not generate scene options. Please try starting a new date.");
-            // Fallback to static options on error
             startSceneSelection(sceneFeatures);
         } finally {
             if (firstDateLoadingModal) firstDateLoadingModal.style.display = 'none';
         }
     } else {
-        // Player 2 shows a simple waiting message, but not a modal.
         uiContainer.innerHTML = `<div class="text-center p-8"><h2>Waiting for Player 1 to set the scene...</h2><p>The first date options will appear here shortly.</p></div>`;
     }
 }
@@ -2635,12 +2585,10 @@ function startSceneSelection(options) {
     const selectionGrid = document.createElement('div');
     selectionGrid.className = 'scene-selection-grid';
 
-    // Use dynamic options, but fall back to static if they are missing
     const locations = options?.locations || sceneFeatures.locations;
     const vibes = options?.vibes || sceneFeatures.vibes;
     const wildcards = options?.wildcards || sceneFeatures.wildcards;
 
-    // Create columns for each category
     const locationColumn = document.createElement('div');
     locationColumn.innerHTML = '<h3>Locations</h3>';
     locations.slice(0, 5).forEach(loc => locationColumn.appendChild(createSelectionCheckbox('location', loc)));
@@ -2705,7 +2653,6 @@ function checkForSceneSelectionCompletion() {
     }
     console.log("Both players have submitted scene selections.");
 
-    // Aggregate selections from both players for each category
     const allSelections = { location: [], vibe: [], wildcard: [] };
     for (const selections of sceneSelections.values()) {
         for (const category in selections) {
@@ -2724,7 +2671,7 @@ function checkForSceneSelectionCompletion() {
 
         let weightedItems = Object.entries(counts).map(([text, count]) => ({
             text: text,
-            weight: count // count will be 1 for single selection, 2 for agreement
+            weight: count
         }));
 
         if (weightedItems.length === 0) {
@@ -2746,7 +2693,6 @@ function checkForSceneSelectionCompletion() {
         wildcards: wildcardItems
     });
 
-    // Pass the arrays of weighted items to the new startSpinner function
     startSpinner(
         [
             { title: 'Location', items: locationItems },
@@ -2755,7 +2701,6 @@ function checkForSceneSelectionCompletion() {
         ],
         (winningResults) => {
             if (amIPlayer1) {
-                // Combine the results into a single scene description
                 const winningScene = `${winningResults[0]} with a ${winningResults[1].toLowerCase()} vibe, when suddenly ${winningResults[2].toLowerCase()}.`;
                 console.log("Final winning scene:", winningScene);
                 fetchFirstTurn(null, winningScene);
@@ -2770,28 +2715,21 @@ async function fetchFirstTurn(minigameWinner, scene) {
     if (loadingText) {
         loadingText.textContent = 'Inventing a new scenario... Please wait.';
     }
-    setLoading(true, true); // Use the simple spinner for the first turn
+    setLoading(true, true);
 
-    // Load the local profile to provide context to the AI if it exists.
     const localProfile = getLocalProfile();
     const profileString = `Player A's saved profile: ${JSON.stringify(localProfile)}. If profile data exists, use it when creating the notes and UI. Otherwise, ensure the UI probes for it.`;
 
-    // For the first turn, there are no previous actions or notes.
-    // The orchestrator will be guided by the 'firstrun_addendum'.
     const initialTurnData = {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
-        // For the first turn, the notes are just placeholder objects. The orchestrator will create the real ones.
         playerA_notes: { summary: `New subject (Player 1) starting date in scene: ${scene}.` },
         playerB_notes: { summary: `New subject (Player 2) starting date in scene: ${scene}.` },
         isExplicit: isDateExplicit,
-        minigameWinner: minigameWinner, // This will be null, but we pass it anyway
-        // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
+        minigameWinner: minigameWinner,
         isFirstTurn: true
     };
 
-    // We can now just call the same function used for all subsequent turns.
-    // This simplifies the logic and ensures consistency.
     await initiateTurnAsPlayer1(initialTurnData);
 }
 
@@ -2842,28 +2780,21 @@ function saveLobbyToHivemind(lobbyName) {
 function switchToRoom(roomName, isPublic) {
     console.log(`Switching to room: ${roomName} (Public: ${isPublic})`);
 
-    // Don't do anything if we're already in that room
     if (roomName === currentRoomName) {
         showNotification("You are already in this room.", "warn");
         return;
     }
 
-    // Provide immediate UI feedback
     const lobby = document.getElementById('lobby-container');
     if (lobby) {
         lobby.innerHTML = `<h2>Joining ${roomName}...</h2>`;
     }
 
-    // Leave the old room's network
     MPLib.leaveRoom();
 
-    // Set the new room name and join the new network
     currentRoomName = roomName;
     currentRoomIsPublic = isPublic;
     MPLib.joinRoom(roomName);
-
-    // The 'handleRoomConnected' callback will automatically notify the master directory
-    // of our new location once the connection is established.
 }
 
 function loadGameStateFromStorage() {
@@ -2871,7 +2802,6 @@ function loadGameStateFromStorage() {
     if (savedStateJSON) {
         try {
             const savedState = JSON.parse(savedStateJSON);
-            // Restore state, with fallbacks for safety
             currentUiJson = savedState.currentUiJson || null;
             historyQueue = savedState.historyQueue || [];
             isExplicitMode = savedState.isExplicitMode || false;
@@ -2879,10 +2809,9 @@ function loadGameStateFromStorage() {
 
             console.log("Game state loaded from localStorage.");
 
-            // Update UI based on loaded state
             if (currentUiJson) {
                 renderUI(currentUiJson);
-                apiKeyLocked = true; // If we have game state, key must have been locked
+                apiKeyLocked = true;
                 resetGameButton.disabled = false;
                  if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
                  if(gameWrapper) gameWrapper.style.display = 'block';
@@ -2892,28 +2821,37 @@ function loadGameStateFromStorage() {
 
         } catch (error) {
             console.error("Error loading game state from localStorage:", error);
-            localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear corrupted data
+            localStorage.removeItem(LOCAL_STORAGE_KEY);
         }
     }
 }
 
 function initializeGame() {
     console.log("Initializing Flagged with new Master Directory architecture...");
-    loadGameStateFromStorage(); // Load saved state first
+    loadGameStateFromStorage();
 
-    // Handle interstitial continue button click
     interstitialContinueButton.addEventListener('click', () => {
-        interstitialScreen.style.display = 'none';
-        window.scrollTo(0, 0); // Scroll to top
+        if (!bufferedNextTurnUi) {
+            console.error("Continue button clicked, but no buffered UI to render!");
+            return;
+        }
 
-        // Reset state for the next turn
+        interstitialScreen.style.display = 'none';
+        window.scrollTo(0, 0);
+
+        currentUiJson = bufferedNextTurnUi;
+        renderUI(currentUiJson);
+        playTurnAlertSound();
+
+        // Reset all the temporary state variables for the next cycle
         localPlayerAnalysis = null;
         partnerPlayerAnalysis = null;
-        setLoading(false); // Re-enable controls now that the user has seen the reports
+        bufferedNextTurnUi = null;
+        partnerFinishedBuffering = false;
+
+        setLoading(false);
     });
 
-    // Hide the game wrapper and show the lobby selection by default
-    // This logic might be overridden by loadGameStateFromStorage if there's a saved game
     if (!currentUiJson) {
         if(gameWrapper) gameWrapper.style.display = 'none';
         if(lobbyContainer) lobbyContainer.style.display = 'none';
@@ -2921,25 +2859,21 @@ function initializeGame() {
     }
 
 
-    populateLobbySelector(); // Populate dropdown with any saved/preset lobbies
+    populateLobbySelector();
 
-    // This listener handles the initial login/API key submission
     joinLobbyButton.addEventListener('click', () => {
         const apiKey = apiKeyInput.value.trim();
         if (!apiKey) {
-            // This case should now only be hit if the primary key fails and the user deletes it.
             showError("API Key is required to connect.");
             return;
         }
 
-        // Save API key and hide the selection screen
         localStorage.setItem('sparksync_apiKey', apiKey);
         apiKeyLocked = true;
         hideError();
         if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
-        lobbyContainer.style.display = 'block'; // Show the lobby container (which will initially be empty)
+        lobbyContainer.style.display = 'block';
 
-        // The main entrypoint to the multiplayer library
         MPLib.initialize({
             debugLevel: 1,
             onStatusUpdate: handleStatusUpdate,
@@ -2954,13 +2888,11 @@ function initializeGame() {
             onRoomPeerDisconnected: (masterId) => {
                 console.log(`Peer with masterId ${masterId.slice(-6)} has disconnected. Cleaning up state.`);
                 remoteGameStates.delete(masterId);
-                // No need to call renderLobby here, as onRoomPeerLeft already does.
             },
             onRoomDataReceived: handleRoomDataReceived,
         });
     });
 
-    // Add listeners for the new room creation buttons
     const createPublicBtn = document.getElementById('create-public-room-btn');
     const createPrivateBtn = document.getElementById('create-private-room-btn');
     const newRoomInput = document.getElementById('new-room-name-input');
@@ -2980,13 +2912,11 @@ function initializeGame() {
     createPrivateBtn.addEventListener('click', () => {
         const roomName = newRoomInput.value.trim();
         if (roomName) {
-            // No check needed for private rooms as they are not listed
             switchToRoom(roomName, false);
             newRoomInput.value = '';
         }
     });
 
-    // --- New Key Management and Auto-Login Logic ---
     const primaryApiKey = getPrimaryApiKey();
     const savedApiKey = localStorage.getItem('sparksync_apiKey');
 
@@ -2995,16 +2925,15 @@ function initializeGame() {
         apiKeyInput.disabled = true;
         apiKeyInput.placeholder = "Using default key";
         console.log("Using primary API key.");
-        joinLobbyButton.click(); // Auto-login with the primary key
+        joinLobbyButton.click();
     } else if (savedApiKey) {
         apiKeyInput.value = savedApiKey;
         console.log("Using saved API key.");
-        joinLobbyButton.click(); // Auto-login with a previously user-provided key
+        joinLobbyButton.click();
     } else {
          console.log("No primary or saved key found. Waiting for user input.");
     }
 
-    // --- Debug Panel Listeners ---
     if (toggleDebugPanelButton && debugPanel) {
         toggleDebugPanelButton.addEventListener('click', () => {
             const isHidden = debugPanel.style.display === 'none';
@@ -3022,10 +2951,7 @@ function initializeGame() {
         });
     }
 
-    // Graceful disconnect
     window.addEventListener('beforeunload', () => {
-        // This is a best-effort attempt. Most modern browsers are strict
-        // about what can be done in this event handler.
         MPLib.broadcastToRoom({ type: 'graceful_disconnect' });
         console.log("Sent graceful disconnect message.");
     });
