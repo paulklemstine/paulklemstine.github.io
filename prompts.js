@@ -84,12 +84,13 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
 //         - For Player B's instructions, 'own_clinical_analysis' comes from playerB_analysis.clinical_report. 'partner_clinical_analysis' comes from playerA_analysis.clinical_report.
 //         - The red and green flags are passed through similarly. You are a CONDUIT for the analysis, not the generator.
 
-// ### OUTPUT FORMAT ###
-// Structure your output exactly as follows, using '---|||---' as the separator:
+// ### CRITICAL OUTPUT FORMAT ###
+// You MUST structure your output exactly as follows. You will use the special computer-readable separator '%%%NEXT_SECTION%%%' to divide the content. This is a machine-readable instruction and must not be altered or used anywhere else in the text.
+//
 // [SHARED NARRATIVE AND SCENE SETUP FOR BOTH PLAYERS]
-// ---|||---
+// %%%NEXT_SECTION%%%
 // [DETAILED INSTRUCTIONS FOR PLAYER A's TURN, INCLUDING PASS-THROUGH OF NOTES AND ANALYSIS]
-// ---|||---
+// %%%NEXT_SECTION%%%
 // [DETAILED INSTRUCTIONS FOR PLAYER B's TURN, INCLUDING PASS-THROUGH OF NOTES AND ANALYSIS]
 `,
     masturbationModeAddendum: `
