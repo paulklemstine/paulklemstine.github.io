@@ -33,9 +33,12 @@ let minigameCompletionCallback = null;
 let playerMove = null;
 let partnerMove = null;
 let minigameRound = 1;
+let lastMinigameWinner = null;
 let player1IsInitiator = true;
 let minigameActionData = null; // To hold LLM-generated actions
 let preloadedMinigameData = null; // To preload the *next* turn's actions
+let playerScore = 0;
+let partnerScore = 0;
 
 // --- Model Switching State ---
 const AVAILABLE_MODELS = [
@@ -753,18 +756,18 @@ function checkForTurnCompletion() {
         return;
     }
 
-    console.log("All turns received. Starting minigame before next turn generation.");
+    console.log("All turns received. Initiating next turn generation AND starting minigame.");
 
-    startMinigame((winner) => {
-        if (amIPlayer1) {
+    // Player 1 is responsible for starting the next turn generation
+    if (amIPlayer1) {
         const myRoomId = MPLib.getLocalRoomId();
-        const partnerRoomId = roomConnections.keys().next().value;
+        const partnerRoomId = Array.from(roomConnections.keys()).find(id => id !== myRoomId);
         const playerA_actions = turnSubmissions.get(myRoomId);
         const playerB_actions = turnSubmissions.get(partnerRoomId);
 
         if (!playerA_actions || !playerB_actions) {
             showError("FATAL: Could not map submissions to players. Aborting turn.");
-            if (spinnerModal) spinnerModal.style.display = 'none'; // Hide spinner on error
+            if (spinnerModal) spinnerModal.style.display = 'none';
             turnSubmissions.clear();
             return;
         }
@@ -776,16 +779,18 @@ function checkForTurnCompletion() {
             playerB_notes: playerB_actions.notes,
             isExplicit: isDateExplicit,
             history: historyQueue,
-            minigameWinner: winner
+            minigameWinner: lastMinigameWinner
         });
-
+        lastMinigameWinner = null;
         turnSubmissions.clear();
     } else {
-        // Player 2's work is done, they just wait for the next turn from P1.
-        console.log("I am Player 2. My work is done for this turn, waiting for P1.");
         turnSubmissions.clear();
     }
-});
+
+    startMinigame((winner) => {
+        console.log(`Minigame session finished. Overall winner: ${winner}`);
+        lastMinigameWinner = winner;
+    });
 }
 
 async function initiateSinglePlayerTurn(turnData, history = []) {
@@ -1848,6 +1853,8 @@ async function startMinigame(onComplete) {
     minigameRound = 1;
     playerMove = null;
     partnerMove = null;
+    playerScore = 0;
+    partnerScore = 0;
     player1IsInitiator = true; // Player 1 always starts as the initiator
     minigameActionData = null; // Clear old data
     preloadedMinigameData = null; // Clear old data
@@ -1861,6 +1868,7 @@ async function startMinigame(onComplete) {
         previousResultDisplay.innerHTML = '';
         previousResultDisplay.classList.add('hidden');
     }
+    updateScoreboard();
 
 
     // Player 1 is responsible for generating and distributing the game data
@@ -1930,7 +1938,6 @@ function checkForRoundCompletion() {
         // Wait a moment before revealing the winner
         setTimeout(async () => {
             try {
-                // The history provides context for the LLM's decision
                 const context = historyQueue.length > 0 ?
                     JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
                     : "It's the beginning of the date.";
@@ -1938,42 +1945,41 @@ function checkForRoundCompletion() {
                 const outcome = await getMinigameOutcome(initiatorMove, receiverMove, context, isDateExplicit, callGeminiApiWithRetry);
 
                 if (outcome && resultImage && resultNarrative && graphicalResultDisplay) {
-                    // Display the LLM's story
                     resultNarrative.textContent = outcome.narrative;
                     const randomSeed = Math.floor(Math.random() * 65536);
                     resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(outcome.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
                     graphicalResultDisplay.classList.remove('hidden');
 
                     let roundMessage = "The outcome is a draw!";
-                     if (outcome.winner && outcome.winner !== 'draw') {
-                        const iAmWinner = (iAmInitiator && outcome.winner === 'initiator') || (!iAmInitiator && outcome.winner === 'receiver');
+                    const winner = outcome.winner;
+                    if (winner && winner !== 'draw') {
+                        const iAmWinner = (iAmInitiator && winner === 'initiator') || (!iAmInitiator && winner === 'receiver');
                         if (iAmWinner) {
+                            playerScore++;
                             roundMessage = "You won the moment!";
                         } else {
+                            partnerScore++;
                             roundMessage = "Your partner won the moment.";
                         }
                     }
-                     roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>. <br><strong>${roundMessage}</strong>`;
-
+                    roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>. <br><strong>${roundMessage}</strong>`;
+                    updateScoreboard();
                 } else {
                      roundResultDisplay.innerHTML += `<br>Could not determine the outcome. Let's call it a draw.`;
                 }
 
-                 // Continue to the next round indefinitely
                 minigameRound++;
-                player1IsInitiator = !player1IsInitiator; // Swap roles
-                setTimeout(resetRoundUI, 8000); // Increased delay to show story and image
-
+                player1IsInitiator = !player1IsInitiator;
+                setTimeout(resetRoundUI, 8000);
 
             } catch (e) {
                 console.error("Could not generate round outcome:", e);
                 roundResultDisplay.innerHTML += `<br>An error occurred. Let's call it a draw and continue.`;
                 minigameRound++;
-                player1IsInitiator = !player1IsInitiator; // Swap roles
+                player1IsInitiator = !player1IsInitiator;
                 setTimeout(resetRoundUI, 5000);
             }
-
-        }, 2500); // 2.5 second delay to show moves
+        }, 2500);
     }
 }
 
@@ -1982,18 +1988,28 @@ function endMinigame() {
     minigameActive = false;
     setMoveButtonsDisabled(true);
 
-    // Fade out and hide the modal
+    let finalWinner = 'draw';
+    if (playerScore > partnerScore) {
+        finalWinner = 'player';
+    } else if (partnerScore > playerScore) {
+        finalWinner = 'partner';
+    }
+
     if (minigameModal) {
         minigameModal.style.opacity = '0';
         setTimeout(() => {
             minigameModal.style.display = 'none';
-            minigameModal.style.opacity = '1'; // Reset for next time
+            minigameModal.style.opacity = '1';
             if (minigameCompletionCallback) {
-                // In the new flow, there's no single "winner" of the whole game.
-                // We can pass a neutral value or decide on a convention.
-                minigameCompletionCallback('continue');
+                minigameCompletionCallback(finalWinner);
             }
         }, 500);
+    }
+}
+function updateScoreboard() {
+    if(playerScoreDisplay && partnerScoreDisplay){
+        playerScoreDisplay.textContent = playerScore;
+        partnerScoreDisplay.textContent = partnerScore;
     }
 }
 
@@ -2007,12 +2023,10 @@ function resetRoundUI() {
         // ...move its content to the "previous result" div and show it.
         previousResultDisplay.innerHTML = '<h4>Previous Round:</h4>' + graphicalResultDisplay.innerHTML;
         previousResultDisplay.classList.remove('hidden');
-    }
 
-    // Hide the main graphical result display so it's ready for the next outcome.
-    if (graphicalResultDisplay) {
+        // NOW, clear the graphical result display and hide it.
+        graphicalResultDisplay.innerHTML = '';
         graphicalResultDisplay.classList.add('hidden');
-        // We clear the whole div in the line above, so clearing the image src separately is not needed.
     }
 
 

@@ -754,6 +754,10 @@ body {
     background-color: #5a6268;
 }
 
+#minigame-scoreboard {
+    color: #495057;
+}
+
 #minigame-previous-result {
     border: 1px solid #e9ecef;
     padding: 1rem;
