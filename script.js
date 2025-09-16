@@ -575,7 +575,8 @@ async function generateLocalTurn(orchestratorText, playerRole) {
     setLoading(true); // Show interstitial
 
     try {
-        const parts = orchestratorText.split(/\n?---\|\|\|---\n?|\n---\n/).filter(p => p.trim() !== '');
+        // Use a more specific regex that only splits on the triple-pipe delimiter.
+        const parts = orchestratorText.split(/\n?---\|\|\|---\n?/).filter(p => p.trim() !== '');
         if (parts.length !== 3) {
             throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
         }
