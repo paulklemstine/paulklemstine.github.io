@@ -793,8 +793,14 @@ function checkForTurnPackages() {
         lastMinigameWinner = null; // Reset winner after use
         turnPackages.clear(); // Clear packages for the next turn
 
-        // The minigame for the *next* turn starts now. Player 1 broadcasts the start signal.
-        MPLib.broadcastToRoom({ type: 'start_minigame' });
+        // Player 1 now delegates the minigame generation to Player 2 to run in parallel.
+        if (partnerRoomId) {
+            console.log("Delegating minigame generation to Player 2.");
+            MPLib.sendDirectToRoomPeer(partnerRoomId, { type: 'generate_minigame_data' });
+        } else {
+            console.error("Could not find partner to delegate minigame generation.");
+            // Handle error case, maybe by P1 generating it anyway? For now, just log.
+        }
     }
 }
 
@@ -1883,8 +1889,8 @@ function handleRoomPeerLeft(peerId) {
 
 // --- Minigame Functions ---
 
-async function startMinigame(onComplete) {
-    console.log("Starting 'Make a Move' Minigame...");
+function startMinigame(onComplete) {
+    console.log("Starting 'Make a Move' Minigame UI...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
     minigameRound = 1;
@@ -1893,8 +1899,6 @@ async function startMinigame(onComplete) {
     playerScore = 0;
     partnerScore = 0;
     player1IsInitiator = true; // Player 1 always starts as the initiator
-    minigameActionData = null; // Clear old data
-    preloadedMinigameData = null; // Clear old data
 
     if (minigameModal) minigameModal.style.display = 'flex';
     if (roundResultDisplay) roundResultDisplay.innerHTML = '';
@@ -1907,38 +1911,10 @@ async function startMinigame(onComplete) {
     }
     updateScoreboard();
 
-
-    // Player 1 is responsible for generating and distributing the game data
-    if (amIPlayer1) {
-        minigameTitle.textContent = "Generating Actions...";
-        try {
-            const data = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
-            if (data) {
-                minigameActionData = data;
-                MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
-                console.log("Minigame data generated and broadcasted.");
-                // Preload the next turn's data immediately
-                getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
-                    preloadedMinigameData = preloadData;
-                    MPLib.broadcastToRoom({ type: 'minigame_preload_data', payload: preloadData });
-                    console.log("Preloaded minigame data for next round and sent to partner.");
-                });
-                minigameTitle.textContent = "Make a Move";
-                resetRoundUI(); // Now we can setup the UI
-            } else {
-                showError("Could not generate minigame actions. Closing minigame.");
-                setTimeout(endMinigame, 3000);
-            }
-        } catch (error) {
-            console.error("Error getting minigame actions:", error);
-            showError("Failed to start minigame due to an API error.");
-            setTimeout(endMinigame, 3000);
-        }
-    } else {
-        // Player 2 just waits for the data
-        minigameTitle.textContent = "Partner is Generating Actions...";
-        roundResultDisplay.textContent = "Waiting for partner to create the game...";
-    }
+    // The data is now pre-loaded by the 'minigame_ready' message handler.
+    // This function just sets up the UI.
+    minigameTitle.textContent = "Make a Move";
+    resetRoundUI();
 }
 
 function handlePlayerMove(move) {
@@ -2211,9 +2187,15 @@ function handleRoomDataReceived(senderId, data) {
             }
             break;
 
-        case 'start_minigame':
-            // This message is received by both players to ensure the minigame UI starts synchronously.
-            console.log("Received start_minigame signal.");
+        case 'minigame_ready':
+            console.log("Received minigame_ready signal with data. Starting minigame for all players.");
+            const { initialData, preloadData } = data.payload;
+
+            // Set the data for the current and next round
+            minigameActionData = initialData;
+            preloadedMinigameData = preloadData;
+
+            // Now that the data is loaded, start the minigame UI.
             startMinigame((winner) => {
                 // The onComplete callback is only relevant for player 1, who sets the state for the next turn.
                 if (amIPlayer1) {
@@ -2221,6 +2203,34 @@ function handleRoomDataReceived(senderId, data) {
                     lastMinigameWinner = winner;
                 }
             });
+            break;
+
+        case 'generate_minigame_data':
+            if (!amIPlayer1) {
+                console.log("Received delegation. Generating minigame data...");
+                // Use an async IIFE to handle the async operations.
+                (async () => {
+                    try {
+                        const initialData = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
+                        const preloadData = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
+
+                        if (initialData && preloadData) {
+                            console.log("Minigame data generated. Broadcasting 'minigame_ready' to room.");
+                            MPLib.broadcastToRoom({
+                                type: 'minigame_ready',
+                                payload: {
+                                    initialData: initialData,
+                                    preloadData: preloadData
+                                }
+                            });
+                        } else {
+                            console.error("Failed to generate one or both sets of minigame actions.");
+                        }
+                    } catch (error) {
+                        console.error("Error during delegated minigame generation:", error);
+                    }
+                })();
+            }
             break;
 
         case 'turn_package_submission':
