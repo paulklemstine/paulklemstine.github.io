@@ -903,11 +903,20 @@ function selectOptimalModel(quality = 'high') {
             continue; // Skip to the next model
         }
 
-        // 2. Status check (for models that were previously rate limited)
+        // 2. Status check (for models that were previously rate limited or busy)
         if (model.status === 'rate_limited') {
             const cooldown = 60 * 1000; // 60 seconds
             if (now - model.lastRateLimitTime > cooldown) {
-                console.log(`Model ${model.name} cooldown period has passed. Resetting status to 'ok'.`);
+                console.log(`Model ${model.name} rate limit cooldown has passed. Resetting status to 'ok'.`);
+                model.status = 'ok';
+                model.lastRateLimitTime = 0;
+            } else {
+                continue; // Still in cooldown
+            }
+        } else if (model.status === 'busy') {
+            const cooldown = 5 * 60 * 1000; // 5 minutes
+            if (now - model.lastRateLimitTime > cooldown) {
+                console.log(`Model ${model.name} busy cooldown has passed. Resetting status to 'ok'.`);
                 model.status = 'ok';
                 model.lastRateLimitTime = 0;
             } else {
@@ -990,8 +999,11 @@ async function callGeminiApiWithRetry(prompt, responseMimeType = "application/js
             }
 
             // Handle other errors (503, primary key failure, network errors)
-            if (error.message && error.message.includes('503')) {
-                throw new Error("LLM service is currently overloaded (503). Please try again shortly.");
+            if (model && error.message && error.message.includes('503')) {
+                console.warn(`Model ${model.name} is busy (503). Marking as busy and retrying.`);
+                model.status = 'busy';
+                model.lastRateLimitTime = Date.now();
+                continue;
             }
             if (error.message && error.message.includes('API_KEY_INVALID')) {
                 const primaryKey = getPrimaryApiKey();
