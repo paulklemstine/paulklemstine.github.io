@@ -178,7 +178,7 @@ Example for a non-explicit theme:
  */
 export async function getMinigameActions(isExplicit, llmApiCall) {
     const theme = isExplicit
-        ? "a tense, intimate, and sexually charged moment between two people on a date"
+        ? "an intense, intimate, and explicitly sexual moment between two people on a date. The actions should be daring and provocative."
         : "a cute, slightly awkward, romantic moment between two people on a date";
 
     const prompt = `You are a game designer creating actions for a minigame about physical intimacy on a date. The theme is: ${theme}.
@@ -224,7 +224,7 @@ The final JSON object MUST have this exact structure:
  */
 export async function getMinigameOutcome(initiatorMove, receiverMove, context, isExplicit, llmApiCall) {
      const theme = isExplicit
-        ? "a tense, intimate, and sexually charged moment between two people on a date"
+        ? "an intense, intimate, and explicitly sexual moment between two people on a date. The narrative should be descriptive and passionate."
         : "a cute, slightly awkward, romantic moment between two people on a date";
 
     const prompt = `You are a creative writer and game referee describing a moment in a date.
