@@ -1871,7 +1871,7 @@ function handleRoomPeerLeft(peerId) {
         isDateActive = false;
         currentPartnerId = null;
         amIPlayer1 = false;
-        turnSubmissions.clear();
+        turnPackages.clear();
         // Now, it's safe to render the lobby, which will show the lobby and hide the game.
         renderLobby();
         return; // Important to stop here.
@@ -2218,13 +2218,13 @@ function handleRoomDataReceived(senderId, data) {
             break;
 
         case 'turn_submission':
-            console.log(`Received turn submission from ${senderId.slice(-6)}`);
+            console.log(`Received turn submission package from ${senderId.slice(-6)}`);
             if (isDateActive) {
-                // The payload is already a JS object, no need to parse it again.
-                const actions = data.payload;
+                // The payload is the complete package (actions + analysis)
+                const fullPackage = data.payload;
                 // Use the room ID as the key
-                turnSubmissions.set(senderId, actions);
-                checkForTurnCompletion();
+                turnPackages.set(senderId, fullPackage);
+                checkForTurnPackages();
             }
             break;
 
@@ -2357,48 +2357,78 @@ function renderGlobalRoomList() {
 // --- Event Listeners ---
 
 // Modify the original click listener
-submitButton.addEventListener('click', () => {
+submitButton.addEventListener('click', async () => {
     if (isLoading) return;
-    submitButton.disabled = true; // Prevent double-clicks
+    submitButton.disabled = true;
 
-    // --- Single source of truth for actions ---
     const playerActionsJson = collectInputState();
-    updateHistoryQueue(playerActionsJson); // <-- BUG FIX: Actually update the history
+    updateHistoryQueue(playerActionsJson);
     const playerActions = JSON.parse(playerActionsJson);
-    updateLocalProfileFromTurn(playerActions); // Update profile regardless of mode
+    updateLocalProfileFromTurn(playerActions);
 
+    const loadingText = document.getElementById('loading-text');
+    if(loadingText) loadingText.textContent = 'Analyzing actions...';
+    setLoading(true, true);
+
+    // Get the previous notes for the current player.
+    const lastTurnHistory = historyQueue.length > 1 ? historyQueue[historyQueue.length - 2] : null;
+    let previousNotes = "This is the first turn.";
+    if (lastTurnHistory && lastTurnHistory.actions) {
+        try {
+            const lastActions = JSON.parse(lastTurnHistory.actions);
+            if(lastActions.notes) previousNotes = lastActions.notes;
+        } catch(e) { console.warn("Could not parse previous notes."); }
+    }
+
+
+    // Step 1: Analyze actions locally
+    const analysis = await analyzePlayerActions(playerActions, previousNotes);
+    if (!analysis) {
+        showError("Could not analyze your actions. Please try submitting again.");
+        setLoading(false);
+        submitButton.disabled = false;
+        return;
+    }
+
+     // Step 2: Create the full "turn package"
+    const turnPackage = {
+        actions: playerActions,
+        analysis: analysis
+    };
 
     if (isDateActive) {
         // --- Symmetrical Two-Player Date Logic ---
         const myRoomId = MPLib.getLocalRoomId();
-
         if (myRoomId) {
-            turnSubmissions.set(myRoomId, playerActions);
-            console.log(`Locally recorded submission for ${myRoomId.slice(-6)}`);
+            turnPackages.set(myRoomId, turnPackage);
+            console.log(`Locally recorded turn package for ${myRoomId.slice(-6)}`);
         } else {
-            console.error("Could not get local room ID to record submission.");
+            showError("A local error occurred. Could not submit turn package.");
+            setLoading(false);
             submitButton.disabled = false;
-            showError("A local error occurred. Could not submit turn.");
             return;
         }
 
-        const loadingText = document.getElementById('loading-text');
-        if (loadingText) {
-            loadingText.textContent = 'Waiting for partner...';
-        }
-        setLoading(true, true);
+        if(loadingText) loadingText.textContent = 'Waiting for partner...';
+        showNotification("Actions analyzed and submitted. Waiting for partner...", "info");
 
-        showNotification("Actions submitted. Waiting for partner to submit...", "info");
+        // Broadcast the complete package to everyone in the room.
+        MPLib.broadcastToRoom({ type: 'turn_submission', payload: turnPackage });
 
-        // Broadcast actions to everyone in the room.
-        MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
-
-        checkForTurnCompletion();
+        checkForTurnPackages();
 
     } else {
         // --- Single-Player Logic ---
         console.log("Submit button clicked (single-player mode).");
-        initiateSinglePlayerTurn(playerActions, historyQueue);
+        const turnData = {
+            playerA_actions: playerActions,
+            playerB_actions: { turn: playerActions.turn, action: "The other player is an AI.", notes: "No notes for AI." }, // Dummy data for player B
+            playerA_analysis: analysis,
+            playerB_analysis: { green_flags: "N/A", red_flags: "N/A", clinical_report: "The other player is an AI and was not analyzed." }, // Dummy analysis for B
+            isExplicit: isExplicitMode,
+            history: historyQueue.slice(0, -1) // Pass history *before* this turn
+        };
+        initiateSinglePlayerTurn(turnData);
     }
 });
 // --- MODIFICATION END: Long Press Logic ---
@@ -2616,7 +2646,7 @@ async function startNewDate(partnerId, iAmPlayer1) {
     isDateActive = true;
     currentPartnerId = partnerId;
     amIPlayer1 = iAmPlayer1;
-    turnSubmissions.clear();
+    turnPackages.clear();
     sceneSelections.clear();
 
     // Hide lobby, show game
