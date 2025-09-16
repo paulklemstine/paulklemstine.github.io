@@ -2112,65 +2112,8 @@ function setMoveButtonsDisabled(disabled) {
     });
 }
 
-function handleRoomDataReceived(senderId, data) {
-    console.log(`MPLib Event: Room data received from ${senderId.slice(-6)}`, data);
-    if (!data || !data.type) {
-        console.warn("Received data without type from room peer:", senderId.slice(-6));
-        return;
-    }
-
-    switch (data.type) {
-        case 'date_proposal':
-            console.log(`Received date proposal from ${senderId}`);
-            incomingProposal = {
-                proposerId: senderId,
-                proposerExplicitMode: data.payload?.proposerExplicitMode || false
-            };
-            showProposalModal();
-            break;
-        case 'date_accepted':
-            console.log(`Date proposal accepted by ${senderId}`);
-            showNotification(`Your date with ${senderId.slice(-4)} was accepted! Starting...`, "success");
-            const accepterExplicitMode = data.payload?.accepterExplicitMode || false;
-            isDateExplicit = isExplicitMode && accepterExplicitMode;
-            console.log(`Date explicit mode set to: ${isDateExplicit}`);
-            startNewDate(senderId, true);
-            break;
-        case 'date_declined':
-            console.log(`Date proposal declined by ${senderId}`);
-            showNotification(`Your date with ${senderId.slice(-4)} was declined.`, "warn");
-            break;
-
-        case 'scene_selection_submission':
-            console.log(`Received scene selections from ${senderId.slice(-6)}`);
-            if (isDateActive) {
-                sceneSelections.set(senderId, data.payload);
-                checkForSceneSelectionCompletion();
-            }
-            break;
-
-        case 'spinner_state_update':
-            // This is now handled by a dedicated function for clarity
             if (data.payload && data.payload.spinners) {
                 handleSpinnerStateUpdate(data.payload.spinners);
-            }
-            break;
-        // The 'spinner_result' case is now obsolete, as the final result is
-        // part of the continuous state update. P1 calls endSpinner directly,
-        // and P2 calls it when all spinners stop spinning in the state update.
-
-        case 'minigame_data':
-            if (minigameActive && !amIPlayer1) {
-                minigameActionData = data.payload;
-                console.log("Received minigame data from Player 1.", minigameActionData);
-                resetRoundUI(); // Now that we have data, setup the UI
-            }
-            break;
-
-        case 'minigame_preload_data':
-            if (minigameActive && !amIPlayer1) {
-                preloadedMinigameData = data.payload;
-                console.log("Received preloaded minigame data for next round.", preloadedMinigameData);
             }
             break;
 
@@ -2274,11 +2217,6 @@ function handleRoomDataReceived(senderId, data) {
                 console.log(`Partner chose ${partnerMove}`);
                 checkForRoundCompletion();
             }
-            const button = document.querySelector(`.propose-date-button[data-peer-id="${senderId}"]`);
-            if (button) {
-                button.disabled = false;
-                button.textContent = 'Propose Date';
-            }
             break;
 
         case 'minigame_ready':
@@ -2288,7 +2226,6 @@ function handleRoomDataReceived(senderId, data) {
         case 'generate_minigame_data':
             if (!amIPlayer1) {
                 console.log("Received delegation. Generating minigame data...");
-                // Use an async IIFE to handle the async operations.
                 (async () => {
                     try {
                         const initialData = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
@@ -2298,7 +2235,7 @@ function handleRoomDataReceived(senderId, data) {
                             const payload = { initialData, preloadData };
                             console.log("Minigame data generated. Broadcasting and handling locally.");
                             MPLib.broadcastToRoom({ type: 'minigame_ready', payload: payload });
-                            handleMinigameReady(payload); // Player 2 handles it immediately
+                            handleMinigameReady(payload);
                         } else {
                             console.error("Failed to generate one or both sets of minigame actions.");
                         }
@@ -2312,32 +2249,20 @@ function handleRoomDataReceived(senderId, data) {
         case 'turn_package_submission':
             console.log(`Received turn package from ${senderId.slice(-6)}`);
             if (isDateActive && amIPlayer1) {
-                // Player 1 receives the package from Player 2.
                 turnPackages.set(senderId, data.payload);
                 checkForTurnPackages();
             }
             break;
 
-        case 'new_turn_ui':
-            console.log(`Received new turn UI from ${senderId}`);
-            if (isDateActive && !amIPlayer1) {
-                currentUiJson = data.payload;
-                renderUI(currentUiJson);
-                playTurnAlertSound();
-                submitButton.disabled = false;
-                setLoading(false, true);
-            }
-            break;
         case 'orchestrator_output':
             console.log(`Received orchestrator output from ${senderId}`);
-            currentOrchestratorText = data.payload; // Capture the orchestrator output
+            currentOrchestratorText = data.payload;
             if (isDateActive && !amIPlayer1) {
                 generateLocalTurn(data.payload, 'player2');
             }
             break;
         case 'profile_update':
             console.log(`Received profile update from ${senderId.slice(-6)}`, data.payload);
-            // Use the Master ID for storage to keep it consistent
             const masterId = MPLib.getRoomConnections().get(senderId)?.metadata?.masterId || senderId;
             if (!remoteGameStates.has(masterId)) {
                 remoteGameStates.set(masterId, {});
@@ -2345,23 +2270,11 @@ function handleRoomDataReceived(senderId, data) {
             remoteGameStates.get(masterId).profile = data.payload;
             console.log(`Updated remote profile for ${masterId.slice(-6)}`);
 
-            // Re-render the lobby if it's currently being viewed to show updates live.
             if (lobbyContainer.style.display === 'block') {
                 renderLobby();
             }
             break;
-        case 'new_turn_ui':
-            console.log(`Received new turn UI from ${senderId}`);
-            if (isDateActive && !amIPlayer1) {
-                currentUiJson = data.payload;
-                renderUI(currentUiJson);
-                playTurnAlertSound();
-                submitButton.disabled = false;
-                setLoading(false, true);
-            }
-            break;
         case 'scene_options':
-            // Player 2 receives the options from Player 1
             if (!amIPlayer1) {
                 console.log("Received scene options from Player 1:", data.payload);
                 startSceneSelection(data.payload);
@@ -2369,14 +2282,12 @@ function handleRoomDataReceived(senderId, data) {
             break;
         case 'graceful_disconnect':
             console.log(`Received graceful disconnect from ${senderId.slice(-6)}`);
-            // Manually close the connection. The 'onclose' handler in MPLib
-            // will then trigger the onRoomPeerLeft callback, which handles UI updates.
             MPLib.closeConnection(senderId);
             break;
         case 'llm_overloaded':
             console.log("Received LLM overloaded message from partner.");
             showError("The AI is currently overloaded. Please wait a moment and resubmit your turn.");
-            setLoading(false); // This will re-enable the submit button and hide loading indicators.
+            setLoading(false);
             break;
         default:
             console.warn(`Received unknown message type '${data.type}' from ${senderId.slice(-6)}`);
