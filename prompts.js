@@ -20,7 +20,7 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
 //     - For any element with \`type: "image"\`, you MUST include two additional string attributes:
 //       g) caption: A short, user-facing descriptive caption for the generated image.
 //       h) alt: A brief, descriptive alt text for the image for accessibility.
-//     - The \`value\` attribute for an image element MUST be a detailed, tweet-sized prompt for an image generator (like Pollinations.ai).
+//     - The \`value\` attribute for an image element MUST be a detailed, tweet-sized prompt for an image generator (like Pollinations.ai). The prompt MUST also include a subliminal, manipulative, and fun 1-3 word phrase embedded naturally into the scene (e.g., as graffiti on a wall, a headline on a newspaper, a tattoo). This text must be described as large and unmissable.
 
 // 3.  **Element Order (MANDATORY):**
 //     - The sequence of elements in the array MUST be as follows:
