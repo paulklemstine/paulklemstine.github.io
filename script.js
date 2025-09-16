@@ -1856,6 +1856,12 @@ async function startMinigame(onComplete) {
     if (roundResultDisplay) roundResultDisplay.innerHTML = '';
     if (graphicalResultDisplay) graphicalResultDisplay.classList.add('hidden');
 
+    const previousResultDisplay = document.getElementById('minigame-previous-result');
+    if (previousResultDisplay) {
+        previousResultDisplay.innerHTML = '';
+        previousResultDisplay.classList.add('hidden');
+    }
+
 
     // Player 1 is responsible for generating and distributing the game data
     if (amIPlayer1) {
@@ -1995,11 +2001,20 @@ function resetRoundUI() {
     playerMove = null;
     partnerMove = null;
 
-    // Hide the graphical result from the previous round
+    const previousResultDisplay = document.getElementById('minigame-previous-result');
+    // If the graphical result was shown for the round that just ended...
+    if (graphicalResultDisplay && !graphicalResultDisplay.classList.contains('hidden')) {
+        // ...move its content to the "previous result" div and show it.
+        previousResultDisplay.innerHTML = '<h4>Previous Round:</h4>' + graphicalResultDisplay.innerHTML;
+        previousResultDisplay.classList.remove('hidden');
+    }
+
+    // Hide the main graphical result display so it's ready for the next outcome.
     if (graphicalResultDisplay) {
         graphicalResultDisplay.classList.add('hidden');
-        resultImage.src = ""; // Clear image to prevent flash of old content
+        // We clear the whole div in the line above, so clearing the image src separately is not needed.
     }
+
 
     if (!minigameActionData) {
         console.warn("resetRoundUI called without minigameActionData.");

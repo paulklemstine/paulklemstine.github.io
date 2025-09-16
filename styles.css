@@ -754,6 +754,21 @@ body {
     background-color: #5a6268;
 }
 
+#minigame-previous-result {
+    border: 1px solid #e9ecef;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+    opacity: 0.7;
+}
+
+#minigame-previous-result h4 {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: #495057;
+}
+
 /* --- Spinner Modal --- */
 .spinners-area {
     display: flex;
