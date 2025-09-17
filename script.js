@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, sceneFeatures, getDynamicSceneOptions, getMinigameActions, getMinigameOutcome} from './prompts.js';
+import {geemsPrompts, analyzer_prompt, sceneFeatures, getDynamicSceneOptions, getMinigameActions, getMinigameOutcome} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -121,7 +121,7 @@ let isDateActive = false;
 let currentPartnerId = null;
 let sceneSelections = new Map();
 let amIPlayer1 = false;
-let turnSubmissions = new Map(); // New state for turn aggregation
+let turnPackages = new Map(); // To aggregate full turn packages (actions + analysis)
 let incomingProposal = null;
 let isDateExplicit = false;
 let globalRoomDirectory = { rooms: {}, peers: {} }; // Holds the global state
@@ -171,18 +171,17 @@ function constructPrompt(promptType, turnData) {
     const {
         playerA_actions,
         playerB_actions,
-        playerA_notes,
-        playerB_notes,
+        playerA_analysis,
+        playerB_analysis,
         isExplicit = false,
         isFirstTurn = false,
-        minigameWinner = null, // new
+        minigameWinner = null,
         history = []
     } = turnData;
 
     const activeAddendum = isExplicit ? `\n\n---\n${geemsPrompts.masturbationModeAddendum}\n---\n` : "";
     let minigameAddendum = '';
     if (minigameWinner) {
-        // This function is only ever called by Player 1, who is always Player A in this context.
         const winner = (minigameWinner === 'player') ? 'Player A' : 'Player B';
         const loser = (winner === 'Player A') ? 'Player B' : 'Player A';
         minigameAddendum = `\n\n---\nMINIGAME RESULT\n---\nThe pre-turn minigame was won by ${winner}. The loser was ${loser}. You MUST incorporate this result into the turn. Reward the winner with a small advantage, a moment of good luck, or a positive comment from their partner. You MUST punish the loser with a small disadvantage, an embarrassing moment, or a teasing comment from Dr. Gemini. Be creative and subtle.`;
@@ -193,15 +192,12 @@ function constructPrompt(promptType, turnData) {
     switch (promptType) {
         case 'orchestrator':
             prompt = geemsPrompts.orchestrator;
-            // Append the first run addendum if it's the first turn.
             if (isFirstTurn) {
                 prompt += geemsPrompts.firstrun_addendum;
             }
 
-            // Add history section if it exists
             if (history && history.length > 0) {
                 const historyString = history.map((turn, index) => {
-                    // Safely parse actions to get notes, if possible
                     let notes = "Notes not available in history for this turn.";
                     try {
                         const actionsObj = JSON.parse(turn.actions);
@@ -230,23 +226,23 @@ ${turn.actions}
 ${notes}
 \`\`\`
 `
-                }).join('\n\n---\n\n'); // Separator for clarity
+                }).join('\n\n---\n\n');
                 prompt += `\n\n---\nCONTEXT: LAST ${history.length} TURNS (Most recent first)\n---\n${historyString}`;
             }
 
-            prompt += `\n\n---\nLATEST TURN DATA\n---\n`;
+            prompt += `\n\n---\nLATEST TURN DATA (with Pre-Analysis)\n---\n`;
             prompt += `player_input_A: ${JSON.stringify(playerA_actions)}\n`;
-            prompt += `previous_notes_A: \`\`\`markdown\n${playerA_notes}\n\`\`\`\n\n`;
+            // The analysis object contains the full, updated clinical report which serves as the new notes.
+            prompt += `player_analysis_A: \`\`\`json\n${JSON.stringify(playerA_analysis, null, 2)}\n\`\`\`\n\n`;
             prompt += `player_input_B: ${JSON.stringify(playerB_actions)}\n`;
-            prompt += `previous_notes_B: \`\`\`markdown\n${playerB_notes}\n\`\`\`\n`;
+            prompt += `player_analysis_B: \`\`\`json\n${JSON.stringify(playerB_analysis, null, 2)}\n\`\`\`\n`;
             prompt += activeAddendum;
             prompt += minigameAddendum;
             prompt += `\n--- Generate instructions for both players based on the above. ---`;
-            if(isFirstTurn) console.log("Generated First Turn Orchestrator Prompt.");
-            else console.log("Generated Orchestrator Prompt.");
-            break;
 
-        // The 'main' prompt is now called directly, so no case is needed here.
+            if (isFirstTurn) console.log("Generated First Turn Orchestrator Prompt.");
+            else console.log("Generated Orchestrator Prompt with pre-analyzed data.");
+            break;
 
         default:
             throw new Error(`Unknown prompt type: ${promptType}`);
@@ -579,8 +575,9 @@ async function generateLocalTurn(orchestratorText, playerRole) {
     setLoading(true); // Show interstitial
 
     try {
-        const parts = orchestratorText.split(/\n?---\|\|\|---\n?|\n---\n/).filter(p => p.trim() !== '');
-        if (parts.length !== 3) {
+        // Use a robust regex that accepts the new separator or falls back to the old one.
+        const parts = orchestratorText.split(/\n?%%%NEXT_SECTION%%%\n?|\n?---\|\|\|---\n?/).filter(p => p.trim() !== '');
+        if (parts.length < 3) { // Check for at least 3 parts, as there might be empty strings from the split.
             throw new Error("Invalid orchestrator output format. Full text: " + orchestratorText);
         }
 
@@ -742,74 +739,80 @@ function renderDebugPanel() {
     });
 }
 
-function checkForTurnCompletion() {
+function checkForTurnPackages() {
     const requiredSubmissions = 2;
     const roomConnections = MPLib.getRoomConnections();
-    const numberOfPlayers = roomConnections ? roomConnections.size + 1 : 1;
 
-    if (numberOfPlayers !== 2 || !isDateActive) {
+    // Ensure we are in a 2-player date before proceeding.
+    if (!isDateActive || (roomConnections && roomConnections.size + 1 !== requiredSubmissions)) {
         return;
     }
 
-    if (turnSubmissions.size < requiredSubmissions) {
-        console.log(`Have ${turnSubmissions.size}/${requiredSubmissions} submissions. Waiting...`);
+    if (turnPackages.size < requiredSubmissions) {
+        console.log(`Have ${turnPackages.size}/${requiredSubmissions} turn packages. Waiting...`);
         return;
     }
 
-    console.log("All turns received. Initiating next turn generation AND starting minigame.");
+    console.log("All turn packages received. Initiating next turn generation.");
 
-    // Player 1 is responsible for starting the next turn generation
+    // Player 1 is responsible for orchestrating the next turn.
     if (amIPlayer1) {
         const myRoomId = MPLib.getLocalRoomId();
+        // Find the partner's ID from the live connections.
         const partnerRoomId = Array.from(roomConnections.keys()).find(id => id !== myRoomId);
-        const playerA_actions = turnSubmissions.get(myRoomId);
-        const playerB_actions = turnSubmissions.get(partnerRoomId);
 
-        if (!playerA_actions || !playerB_actions) {
-            showError("FATAL: Could not map submissions to players. Aborting turn.");
-            if (spinnerModal) spinnerModal.style.display = 'none';
-            turnSubmissions.clear();
+        if (!partnerRoomId) {
+            showError("FATAL: Could not find partner's ID. Aborting turn.");
+            turnPackages.clear();
+            setLoading(false);
             return;
         }
 
-        initiateTurnAsPlayer1({
-            playerA_actions: playerA_actions,
-            playerB_actions: playerB_actions,
-            playerA_notes: playerA_actions.notes,
-            playerB_notes: playerB_actions.notes,
+        const packageA = turnPackages.get(myRoomId);
+        const packageB = turnPackages.get(partnerRoomId);
+
+        if (!packageA || !packageB) {
+            showError("FATAL: Could not map turn packages to players. Aborting turn.");
+            turnPackages.clear();
+            setLoading(false);
+            return;
+        }
+
+        // The orchestrator now receives the pre-analyzed reports.
+        const turnData = {
+            playerA_actions: packageA.actions,
+            playerB_actions: packageB.actions,
+            playerA_analysis: packageA.analysis,
+            playerB_analysis: packageB.analysis,
             isExplicit: isDateExplicit,
             history: historyQueue,
             minigameWinner: lastMinigameWinner
-        });
-        lastMinigameWinner = null;
-        turnSubmissions.clear();
-    } else {
-        turnSubmissions.clear();
-    }
+        };
 
-    startMinigame((winner) => {
-        console.log(`Minigame session finished. Overall winner: ${winner}`);
-        lastMinigameWinner = winner;
-    });
+        initiateTurnAsPlayer1(turnData);
+        lastMinigameWinner = null; // Reset winner after use
+        turnPackages.clear(); // Clear packages for the next turn
+
+        // Player 1 now delegates the minigame generation to Player 2 to run in parallel.
+        if (partnerRoomId) {
+            console.log("Delegating minigame generation to Player 2.");
+            MPLib.sendDirectToRoomPeer(partnerRoomId, { type: 'generate_minigame_data' });
+        } else {
+            console.error("Could not find partner to delegate minigame generation.");
+            // Handle error case, maybe by P1 generating it anyway? For now, just log.
+        }
+    }
 }
 
-async function initiateSinglePlayerTurn(turnData, history = []) {
-    console.log("Initiating single-player turn...");
+
+async function initiateSinglePlayerTurn(turnData) {
+    console.log("Initiating single-player turn with pre-analyzed data...");
     setLoading(true, true);
 
     try {
-        // In single player, we can treat the player as both Player A and Player B.
-        // The orchestrator is designed for two sets of inputs, so we provide the same for both.
-        const orchestratorTurnData = {
-            playerA_actions: turnData,
-            playerB_actions: turnData,
-            playerA_notes: turnData.notes,
-            playerB_notes: turnData.notes,
-            isExplicit: isExplicitMode,
-            history: history
-        };
-
-        const orchestratorPrompt = constructPrompt('orchestrator', orchestratorTurnData);
+        // The turnData object is now constructed in the submitButton event listener,
+        // containing the pre-analyzed report.
+        const orchestratorPrompt = constructPrompt('orchestrator', turnData);
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
         currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
@@ -868,9 +871,9 @@ async function initiateTurnAsPlayer1(turnData) {
 
 
 /**
- * A wrapper for the Gemini API call that includes retry logic and primary key fallback.
+ * A wrapper for the Gemini API call that includes retry logic, model preference, and primary key fallback.
  */
-async function callGeminiApiWithRetry(prompt, responseMimeType = "application/json") {
+async function callGeminiApiWithRetry(prompt, responseMimeType = "application/json", preferredModel = null) {
     let apiKey = getPrimaryApiKey(); // Tries the default key first.
     if (!apiKey) {
         apiKey = apiKeyInput.value.trim();
@@ -882,58 +885,98 @@ async function callGeminiApiWithRetry(prompt, responseMimeType = "application/js
     }
 
     let lastError = null;
+    const modelsToTry = [];
 
-    // New logic: Iterate through all available models.
-    for (let i = 0; i < AVAILABLE_MODELS.length; i++) {
-        const modelName = AVAILABLE_MODELS[i];
-        console.log(`Attempting API call with model: ${modelName}`);
-        try {
-            // Attempt the call with the current model
-            const responseText = await callRealGeminiAPI(apiKey, prompt, modelName, responseMimeType);
-            // If it succeeds, return the response immediately.
-            console.log(`API call successful with model: ${modelName}`);
-            currentModelIndex = i; // Remember the last successful model
-            updateModelToggleVisuals(); // Update UI to reflect the working model
-            return responseText;
-        } catch (error) {
-            console.warn(`API call failed for model ${modelName}. Error:`, error.message);
-            lastError = error; // Store the last error
-
-            // If we've tried the last model and it failed, then we handle the final failure.
-            if (i === AVAILABLE_MODELS.length - 1) {
-                console.error("All available models have failed with the current API key.");
-
-                // Check if it was the primary key that failed on all models
-                const primaryKey = getPrimaryApiKey();
-                if (primaryKey && apiKey === primaryKey && error.message && (error.message.includes('429') || error.message.includes('API_KEY_INVALID'))) {
-                    console.warn("Primary API key has failed on all models. Switching to user input.");
-                    hasPrimaryApiKeyFailed = true;
-
-                    // Update the UI to allow the user to enter their own key.
-                    apiKeyInput.disabled = false;
-                    apiKeyInput.value = ''; // Clear the failed key
-                    apiKeyInput.placeholder = 'Enter your Gemini API key';
-                    apiKeyInput.focus();
-
-                    // Remove the failed key from local storage to prevent auto-login with it on next refresh.
-                    localStorage.removeItem('sparksync_apiKey');
-
-                    const userMessage = "The default API key is invalid or has expired on all available models. Please enter your own key to continue.";
-                    showError(userMessage);
-                    // Throw the specific error to be handled by the calling function.
-                    throw new Error(userMessage);
-                }
-
-                // For any other final error (e.g., network error on the last model, or user-provided key failing),
-                // just throw the last recorded error.
-                throw lastError;
-            }
-            // Otherwise, the loop will just continue to the next model.
+    if (preferredModel) {
+        // If a preferred model is given, try only that one.
+        modelsToTry.push(preferredModel);
+    } else {
+        // Otherwise, create a prioritized list starting with the user's selected model.
+        for (let i = 0; i < AVAILABLE_MODELS.length; i++) {
+            const modelIndex = (currentModelIndex + i) % AVAILABLE_MODELS.length;
+            modelsToTry.push(AVAILABLE_MODELS[modelIndex]);
         }
     }
 
-    // This part should theoretically not be reached if the loop runs, but as a fallback:
-    throw new Error(`Failed to get valid response from AI. Last error: ${lastError?.message}`);
+    console.log("Models to try in order:", modelsToTry);
+
+    for (const modelName of modelsToTry) {
+        console.log(`Attempting API call with model: ${modelName}`);
+        try {
+            const responseText = await callRealGeminiAPI(apiKey, prompt, modelName, responseMimeType);
+            console.log(`API call successful with model: ${modelName}`);
+
+            // If this wasn't a preferred model call, update the current index to remember the last successful model.
+            if (!preferredModel) {
+                currentModelIndex = AVAILABLE_MODELS.indexOf(modelName);
+                updateModelToggleVisuals();
+            }
+            return responseText;
+        } catch (error) {
+            console.warn(`API call failed for model ${modelName}. Error:`, error.message);
+            lastError = error; // Store the last error, so we can throw it if all attempts fail.
+        }
+    }
+
+    // This part is reached if all attempts in the loop fail.
+    console.error("All API call attempts failed.");
+
+    // Special handling for when the primary (default) API key fails.
+    const primaryKey = getPrimaryApiKey();
+    // A 400 error is often "API key not valid".
+    if (primaryKey && apiKey === primaryKey && lastError && (lastError.message.includes('429') || lastError.message.includes('API_KEY_INVALID') || lastError.message.includes('400'))) {
+        console.warn("Primary API key has failed. Switching to user input.");
+        hasPrimaryApiKeyFailed = true;
+
+        // Update the UI to allow the user to enter their own key.
+        apiKeyInput.disabled = false;
+        apiKeyInput.value = ''; // Clear the failed key
+        apiKeyInput.placeholder = 'Enter your Gemini API key';
+        apiKeyInput.focus();
+        localStorage.removeItem('sparksync_apiKey'); // Prevent auto-login with the failed key
+
+        const userMessage = "The default API key is invalid or has expired. Please enter your own key to continue.";
+        showError(userMessage);
+        throw new Error(userMessage);
+    }
+
+    // For any other final error, throw the last one we recorded.
+    throw lastError || new Error(`Failed to get valid response from AI after trying all available models.`);
+}
+
+/**
+ * Calls the local analyzer LLM to get a report on a player's actions.
+ * @param {object} actions - The JSON object of actions from the turn.
+ * @param {string} notes - The previous turn's notes for the player.
+ * @returns {Promise<object|null>} A promise that resolves to the analysis object { green_flags, red_flags, clinical_report }.
+ */
+async function analyzePlayerActions(actions, notes) {
+    console.log("Analyzing player actions locally...");
+    try {
+        const prompt = `${analyzer_prompt}\n\n## Previous Notes:\n${notes}\n\n## Current Turn Actions:\n${JSON.stringify(actions, null, 2)}`;
+
+        // This is a complex reasoning task, so it uses the main Pro/Flash toggle and not a "lite" model.
+        const responseJson = await callGeminiApiWithRetry(prompt, "application/json");
+        const analysis = JSON.parse(responseJson);
+
+        // Validate the response
+        if (analysis && typeof analysis.green_flags === 'string' && typeof analysis.red_flags === 'string' && typeof analysis.clinical_report === 'string') {
+            console.log("Successfully received player action analysis.");
+            return analysis;
+        } else {
+            console.warn("Player action analysis response was not in the expected format:", analysis);
+            // Return a default error object to prevent crashes downstream
+            return {
+                green_flags: "Analysis failed.",
+                red_flags: "Analysis failed.",
+                clinical_report: "Could not generate clinical report due to a formatting error."
+            };
+        }
+    } catch (error) {
+        console.error("Failed to get player action analysis from LLM:", error);
+        showError("Failed to analyze player actions.");
+        return null;
+    }
 }
 
 /** Calls the real Google AI (Gemini) API and logs the interaction for the debug panel. */
@@ -1828,7 +1871,7 @@ function handleRoomPeerLeft(peerId) {
         isDateActive = false;
         currentPartnerId = null;
         amIPlayer1 = false;
-        turnSubmissions.clear();
+        turnPackages.clear();
         // Now, it's safe to render the lobby, which will show the lobby and hide the game.
         renderLobby();
         return; // Important to stop here.
@@ -2175,13 +2218,13 @@ function handleRoomDataReceived(senderId, data) {
             break;
 
         case 'turn_submission':
-            console.log(`Received turn submission from ${senderId.slice(-6)}`);
+            console.log(`Received turn submission package from ${senderId.slice(-6)}`);
             if (isDateActive) {
-                // The payload is already a JS object, no need to parse it again.
-                const actions = data.payload;
+                // The payload is the complete package (actions + analysis)
+                const fullPackage = data.payload;
                 // Use the room ID as the key
-                turnSubmissions.set(senderId, actions);
-                checkForTurnCompletion();
+                turnPackages.set(senderId, fullPackage);
+                checkForTurnPackages();
             }
             break;
 
@@ -2314,48 +2357,78 @@ function renderGlobalRoomList() {
 // --- Event Listeners ---
 
 // Modify the original click listener
-submitButton.addEventListener('click', () => {
+submitButton.addEventListener('click', async () => {
     if (isLoading) return;
-    submitButton.disabled = true; // Prevent double-clicks
+    submitButton.disabled = true;
 
-    // --- Single source of truth for actions ---
     const playerActionsJson = collectInputState();
-    updateHistoryQueue(playerActionsJson); // <-- BUG FIX: Actually update the history
+    updateHistoryQueue(playerActionsJson);
     const playerActions = JSON.parse(playerActionsJson);
-    updateLocalProfileFromTurn(playerActions); // Update profile regardless of mode
+    updateLocalProfileFromTurn(playerActions);
 
+    const loadingText = document.getElementById('loading-text');
+    if(loadingText) loadingText.textContent = 'Analyzing actions...';
+    setLoading(true, true);
+
+    // Get the previous notes for the current player.
+    const lastTurnHistory = historyQueue.length > 1 ? historyQueue[historyQueue.length - 2] : null;
+    let previousNotes = "This is the first turn.";
+    if (lastTurnHistory && lastTurnHistory.actions) {
+        try {
+            const lastActions = JSON.parse(lastTurnHistory.actions);
+            if(lastActions.notes) previousNotes = lastActions.notes;
+        } catch(e) { console.warn("Could not parse previous notes."); }
+    }
+
+
+    // Step 1: Analyze actions locally
+    const analysis = await analyzePlayerActions(playerActions, previousNotes);
+    if (!analysis) {
+        showError("Could not analyze your actions. Please try submitting again.");
+        setLoading(false);
+        submitButton.disabled = false;
+        return;
+    }
+
+     // Step 2: Create the full "turn package"
+    const turnPackage = {
+        actions: playerActions,
+        analysis: analysis
+    };
 
     if (isDateActive) {
         // --- Symmetrical Two-Player Date Logic ---
         const myRoomId = MPLib.getLocalRoomId();
-
         if (myRoomId) {
-            turnSubmissions.set(myRoomId, playerActions);
-            console.log(`Locally recorded submission for ${myRoomId.slice(-6)}`);
+            turnPackages.set(myRoomId, turnPackage);
+            console.log(`Locally recorded turn package for ${myRoomId.slice(-6)}`);
         } else {
-            console.error("Could not get local room ID to record submission.");
+            showError("A local error occurred. Could not submit turn package.");
+            setLoading(false);
             submitButton.disabled = false;
-            showError("A local error occurred. Could not submit turn.");
             return;
         }
 
-        const loadingText = document.getElementById('loading-text');
-        if (loadingText) {
-            loadingText.textContent = 'Waiting for partner...';
-        }
-        setLoading(true, true);
+        if(loadingText) loadingText.textContent = 'Waiting for partner...';
+        showNotification("Actions analyzed and submitted. Waiting for partner...", "info");
 
-        showNotification("Actions submitted. Waiting for partner to submit...", "info");
+        // Broadcast the complete package to everyone in the room.
+        MPLib.broadcastToRoom({ type: 'turn_submission', payload: turnPackage });
 
-        // Broadcast actions to everyone in the room.
-        MPLib.broadcastToRoom({ type: 'turn_submission', payload: playerActions });
-
-        checkForTurnCompletion();
+        checkForTurnPackages();
 
     } else {
         // --- Single-Player Logic ---
         console.log("Submit button clicked (single-player mode).");
-        initiateSinglePlayerTurn(playerActions, historyQueue);
+        const turnData = {
+            playerA_actions: playerActions,
+            playerB_actions: { turn: playerActions.turn, action: "The other player is an AI.", notes: "No notes for AI." }, // Dummy data for player B
+            playerA_analysis: analysis,
+            playerB_analysis: { green_flags: "N/A", red_flags: "N/A", clinical_report: "The other player is an AI and was not analyzed." }, // Dummy analysis for B
+            isExplicit: isExplicitMode,
+            history: historyQueue.slice(0, -1) // Pass history *before* this turn
+        };
+        initiateSinglePlayerTurn(turnData);
     }
 });
 // --- MODIFICATION END: Long Press Logic ---
@@ -2573,7 +2646,7 @@ async function startNewDate(partnerId, iAmPlayer1) {
     isDateActive = true;
     currentPartnerId = partnerId;
     amIPlayer1 = iAmPlayer1;
-    turnSubmissions.clear();
+    turnPackages.clear();
     sceneSelections.clear();
 
     // Hide lobby, show game
