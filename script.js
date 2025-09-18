@@ -2080,6 +2080,35 @@ function endMinigame() {
         }, 500);
     }
 }
+
+function processRoundResult(resultData) {
+    // This function is now called by both the initiator (locally)
+    // and the receiver (via network broadcast) to ensure sync.
+
+    if (resultImage && resultNarrative && graphicalResultDisplay) {
+        resultNarrative.textContent = resultData.narrative;
+        const randomSeed = Math.floor(Math.random() * 65536);
+        resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(resultData.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
+        graphicalResultDisplay.classList.remove('hidden');
+    }
+
+    const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
+    if(iAmInitiator) {
+        playerScore = resultData.initiatorScore;
+        partnerScore = resultData.receiverScore;
+    } else {
+        playerScore = resultData.playerScore;
+        partnerScore = resultData.partnerScore;
+    }
+
+
+    roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${resultData.yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${resultData.partnerMoveText}</strong>. <br><strong>${resultData.roundMessage}</strong>`;
+    updateScoreboard();
+
+    minigameRound++;
+    player1IsInitiator = !player1IsInitiator;
+    setTimeout(resetRoundUI, 8000);
+}
 function updateScoreboard() {
     if(playerScoreDisplay && partnerScoreDisplay){
         playerScoreDisplay.textContent = playerScore;
