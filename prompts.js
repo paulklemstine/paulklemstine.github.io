@@ -83,8 +83,8 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
 //
 // ### YOUR TASK ###
 // 1.  **Review Data:** Examine the inputs to see how the date is going. Use their red flags as inspiration for fun, chaotic, romantic scenarios.
-// 2.  **Create Shared Narrative:** Based on their actions, write the next beat of their date. Keep it fun and light.
-// 3.  **Generate Player-Specific Instructions:** For each player (A and B), write a detailed set of instructions for the UI Generator. This instruction string is what the UI Generator will use to build the next screen. It MUST contain a creative directive and instructions to pass through the notes and analysis data.
+// 2.  **Create Shared Narrative:** This is your most important task. Write the next beat of the date's story. The story MUST be a single, cohesive narrative that seamlessly combines the actions of BOTH players from the previous turn. Set the scene and describe what happens as a result of their combined choices. Keep it fun, light, and romantic.
+// 3.  **Generate Player-Specific Instructions:** For each player (A and B), write a detailed set of instructions for the UI Generator. This instruction string is what the UI Generator will use to build the next screen. It MUST contain a creative directive and instructions to pass through the notes and analysis data. **Critically, you MUST instruct the UI generator to include a 'narrative' element where the 'value' is the complete Shared Narrative you wrote in step 2.**
 `,
     masturbationModeAddendum: `
 **DEPRAVITY OVERRIDE: MASTURBATION MODE ACTIVE**
