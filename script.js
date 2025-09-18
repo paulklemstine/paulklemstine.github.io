@@ -3442,7 +3442,7 @@ function endSpinner() {
                 spinnerCompletionCallback(finalResults);
             }
             activeSpinners = [];
-        }, 2000); // Significantly reduced delay
+        }, 4000); // Increased delay to 4s as per user feedback
     } else {
         console.error("Mismatch in spinner results. Aborting.");
         setTimeout(() => {
