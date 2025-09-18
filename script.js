@@ -793,17 +793,19 @@ function checkForTurnPackages() {
             playerB_analysis: packageB.analysis,
             isExplicit: isDateExplicit,
             history: historyQueue,
-            minigameWinner: lastMinigameWinner
+            minigameWinner: lastMinigameWinner // Use winner from the *previous* turn's minigame
         };
 
         initiateTurnAsPlayer1(turnData);
-        lastMinigameWinner = null; // Reset winner after use
         turnPackages.clear(); // Clear packages for the next turn
 
-        // Player 1 now delegates the minigame generation to Player 2 to run in parallel.
+        // Player 1 now delegates the minigame generation to Player 2 to run in parallel,
+        // and both players will start the minigame UI immediately.
         if (partnerRoomId) {
-            console.log("Delegating minigame generation to Player 2.");
+            console.log("Delegating minigame generation to Player 2 and starting minigame locally.");
+            lastMinigameWinner = null; // Reset for the new game that's about to start.
             MPLib.sendDirectToRoomPeer(partnerRoomId, { type: 'generate_minigame_data' });
+            startMinigame(minigameCompletionHandler); // P1 starts their minigame UI immediately.
         } else {
             console.error("Could not find partner to delegate minigame generation.");
             // Handle error case, maybe by P1 generating it anyway? For now, just log.
@@ -849,6 +851,9 @@ async function initiateTurnAsPlayer1(turnData) {
         // The orchestrator now returns a single plain text block
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
         currentOrchestratorText = orchestratorText; // Capture the orchestrator output
+
+        // Now that the orchestrator call is complete, the wait is over. End the minigame.
+        endMinigame();
 
         // Send the entire text block to Player 2
         MPLib.sendDirectToRoomPeer(currentPartnerId, {
@@ -1931,7 +1936,7 @@ function handleRoomPeerLeft(peerId) {
 // --- Minigame Functions ---
 
 async function startMinigame(onComplete) {
-    console.log("Starting 'Make a Move' Minigame...");
+    console.log("Starting 'Make a Move' Minigame UI...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
     minigameRound = 1;
@@ -1954,38 +1959,14 @@ async function startMinigame(onComplete) {
     }
     updateScoreboard();
 
+    // The UI is now symmetrical. Both players see a loading state.
+    // Player 2 is responsible for generating and broadcasting the data.
+    minigameTitle.textContent = "Make a Move";
+    roundResultDisplay.textContent = "Waiting for game data to be generated...";
 
-    // Player 1 is responsible for generating and distributing the game data
-    if (amIPlayer1) {
-        minigameTitle.textContent = "Generating Actions...";
-        try {
-            const data = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
-            if (data) {
-                minigameActionData = data;
-                MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
-                console.log("Minigame data generated and broadcasted.");
-                // Preload the next turn's data immediately
-                getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
-                    preloadedMinigameData = preloadData;
-                    MPLib.broadcastToRoom({ type: 'minigame_preload_data', payload: preloadData });
-                    console.log("Preloaded minigame data for next round and sent to partner.");
-                });
-                minigameTitle.textContent = "Make a Move";
-                resetRoundUI(); // Now we can setup the UI
-            } else {
-                showError("Could not generate minigame actions. Closing minigame.");
-                setTimeout(endMinigame, 3000);
-            }
-        } catch (error) {
-            console.error("Error getting minigame actions:", error);
-            showError("Failed to start minigame due to an API error.");
-            setTimeout(endMinigame, 3000);
-        }
-    } else {
-        // Player 2 just waits for the data
-        minigameTitle.textContent = "Partner is Generating Actions...";
-        roundResultDisplay.textContent = "Waiting for partner to create the game...";
-    }
+    // Hide controls until data arrives
+    initiatorControls.style.display = 'none';
+    receiverControls.style.display = 'none';
 }
 
 function handlePlayerMove(move) {
@@ -2004,66 +1985,75 @@ function checkForRoundCompletion() {
     if (playerMove && partnerMove) {
         const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
 
-        let initiatorMove, receiverMove;
+        // Only the initiator for the round calculates and broadcasts the result.
         if (iAmInitiator) {
-            initiatorMove = playerMove;
-            receiverMove = partnerMove;
-        } else {
-            initiatorMove = partnerMove;
-            receiverMove = playerMove;
-        }
+            console.log(`Round ${minigameRound} complete. As initiator, calculating result...`);
+            const yourMoveText = playerMove.replace(/_/g, ' ');
+            const partnerMoveText = partnerMove.replace(/_/g, ' ');
+            roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.<br>Figuring out what happens...`;
 
-        console.log(`Round ${minigameRound} complete. Initiator: ${initiatorMove}, Receiver: ${receiverMove}`);
+            setTimeout(async () => {
+                try {
+                    const context = historyQueue.length > 0 ?
+                        JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
+                        : "It's the beginning of the date.";
 
-        const yourMoveText = playerMove.replace(/_/g, ' ');
-        const partnerMoveText = partnerMove.replace(/_/g, ' ');
-        roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.<br>Figuring out what happens...`;
-
-        // Wait a moment before revealing the winner
-        setTimeout(async () => {
-            try {
-                const context = historyQueue.length > 0 ?
-                    JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
-                    : "It's the beginning of the date.";
-
-                const outcome = await getMinigameOutcome(initiatorMove, receiverMove, context, isDateExplicit, callGeminiApiWithRetry);
-
-                if (outcome && resultImage && resultNarrative && graphicalResultDisplay) {
-                    resultNarrative.textContent = outcome.narrative;
-                    const randomSeed = Math.floor(Math.random() * 65536);
-                    resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(outcome.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
-                    graphicalResultDisplay.classList.remove('hidden');
+                    const outcome = await getMinigameOutcome(playerMove, partnerMove, context, isDateExplicit, callGeminiApiWithRetry);
 
                     let roundMessage = "The outcome is a draw!";
-                    const winner = outcome.winner;
-                    if (winner && winner !== 'draw') {
-                        const iAmWinner = (iAmInitiator && winner === 'initiator') || (!iAmInitiator && winner === 'receiver');
-                        if (iAmWinner) {
-                            playerScore++;
-                            roundMessage = "You won the moment!";
-                        } else {
-                            partnerScore++;
-                            roundMessage = "Your partner won the moment.";
+                    let winner = 'draw';
+                    let newPlayerScore = playerScore;
+                    let newPartnerScore = partnerScore;
+
+                    if (outcome) {
+                        winner = outcome.winner;
+                        if (winner && winner !== 'draw') {
+                            const initiatorIsWinner = winner === 'initiator';
+                            if (initiatorIsWinner) {
+                                newPlayerScore++;
+                                roundMessage = "You won the moment!";
+                            } else {
+                                newPartnerScore++;
+                                roundMessage = "Your partner won the moment.";
+                            }
                         }
                     }
-                    roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>. <br><strong>${roundMessage}</strong>`;
-                    updateScoreboard();
-                } else {
-                     roundResultDisplay.innerHTML += `<br>Could not determine the outcome. Let's call it a draw.`;
+
+                    const resultPayload = {
+                        narrative: outcome?.narrative || "The moment was ambiguous, a draw.",
+                        image_prompt: outcome?.image_prompt || "cinematic anime, two people looking at each other with confusion",
+                        roundMessage: roundMessage,
+                        yourMoveText: yourMoveText,
+                        partnerMoveText: partnerMoveText,
+                        // Send scores from the initiator's perspective
+                        initiatorScore: newPlayerScore,
+                        receiverScore: newPartnerScore
+                    };
+
+                    // Broadcast the definitive result to the partner
+                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: resultPayload });
+
+                    // Process the result locally for the initiator
+                    processRoundResult(resultPayload);
+
+                } catch (e) {
+                    console.error("Could not generate round outcome:", e);
+                    const errorPayload = {
+                         narrative: "An error occurred trying to determine the outcome.",
+                         image_prompt: "cinematic anime, a broken mirror, confusion and glitches",
+                         roundMessage: "An error occurred.",
+                         yourMoveText: yourMoveText,
+                         partnerMoveText: partnerMoveText,
+                         initiatorScore: playerScore,
+                         receiverScore: partnerScore
+                    };
+                     MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: errorPayload });
+                     processRoundResult(errorPayload);
                 }
-
-                minigameRound++;
-                player1IsInitiator = !player1IsInitiator;
-                setTimeout(resetRoundUI, 8000);
-
-            } catch (e) {
-                console.error("Could not generate round outcome:", e);
-                roundResultDisplay.innerHTML += `<br>An error occurred. Let's call it a draw and continue.`;
-                minigameRound++;
-                player1IsInitiator = !player1IsInitiator;
-                setTimeout(resetRoundUI, 5000);
-            }
-        }, 2500);
+            }, 1000); // Shortened delay to start result calculation
+        } else {
+             console.log(`Round ${minigameRound} complete. As receiver, waiting for result...`);
+        }
     }
 }
 
@@ -2089,6 +2079,35 @@ function endMinigame() {
             }
         }, 500);
     }
+}
+
+function processRoundResult(resultData) {
+    // This function is now called by both the initiator (locally)
+    // and the receiver (via network broadcast) to ensure sync.
+
+    if (resultImage && resultNarrative && graphicalResultDisplay) {
+        resultNarrative.textContent = resultData.narrative;
+        const randomSeed = Math.floor(Math.random() * 65536);
+        resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(resultData.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
+        graphicalResultDisplay.classList.remove('hidden');
+    }
+
+    const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
+    if(iAmInitiator) {
+        playerScore = resultData.initiatorScore;
+        partnerScore = resultData.receiverScore;
+    } else {
+        playerScore = resultData.playerScore;
+        partnerScore = resultData.partnerScore;
+    }
+
+
+    roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${resultData.yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${resultData.partnerMoveText}</strong>. <br><strong>${resultData.roundMessage}</strong>`;
+    updateScoreboard();
+
+    minigameRound++;
+    player1IsInitiator = !player1IsInitiator;
+    setTimeout(resetRoundUI, 8000);
 }
 function updateScoreboard() {
     if(playerScoreDisplay && partnerScoreDisplay){
@@ -2151,11 +2170,12 @@ function resetRoundUI() {
     // Shuffle and pick 4 actions
     const selectedActions = actionsToShow.sort(() => 0.5 - Math.random()).slice(0, 4);
 
-    selectedActions.forEach(action => {
+    selectedActions.forEach(actionObj => {
         const button = document.createElement('button');
         button.className = 'geems-button minigame-button';
-        button.textContent = action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); // Capitalize words
-        button.onclick = () => handlePlayerMove(action);
+        const actionText = actionObj.action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        button.textContent = `${actionText} (${actionObj.hint})`;
+        button.onclick = () => handlePlayerMove(actionObj.action);
         if (buttonContainer) {
             buttonContainer.appendChild(button);
         }
@@ -2181,6 +2201,19 @@ function setMoveButtonsDisabled(disabled) {
     buttons.forEach(button => {
         button.disabled = disabled;
     });
+}
+
+function minigameCompletionHandler(winner) {
+    // The winner is 'player' if the local player won, 'partner' if the remote player won.
+    // The orchestrator expects to know who Player A and Player B are.
+    if (winner === 'draw') {
+        lastMinigameWinner = null;
+    } else if (winner === 'player') {
+        lastMinigameWinner = amIPlayer1 ? 'playerA' : 'playerB';
+    } else if (winner === 'partner') {
+        lastMinigameWinner = amIPlayer1 ? 'playerB' : 'playerA';
+    }
+    console.log(`Minigame complete. Stored winner for next turn: ${lastMinigameWinner}`);
 }
 
 function handleRoomDataReceived(senderId, data) {
@@ -2231,9 +2264,10 @@ function handleRoomDataReceived(senderId, data) {
         // and P2 calls it when all spinners stop spinning in the state update.
 
         case 'minigame_data':
-            if (minigameActive && !amIPlayer1) {
+            // This is now received by Player 1 after Player 2 generates and broadcasts it.
+            if (minigameActive && amIPlayer1) {
                 minigameActionData = data.payload;
-                console.log("Received minigame data from Player 1.", minigameActionData);
+                console.log("Player 1 received minigame data broadcast.", minigameActionData);
                 resetRoundUI(); // Now that we have data, setup the UI
             }
             break;
@@ -2255,6 +2289,23 @@ function handleRoomDataReceived(senderId, data) {
             if (button) {
                 button.disabled = false;
                 button.textContent = 'Propose Date';
+            }
+            break;
+        case 'minigame_round_result':
+            // The receiver gets the definitive result from the initiator.
+            console.log("Received definitive round result from initiator.");
+            const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
+             if (!iAmInitiator) {
+                // The payload scores are from the initiator's perspective. We need to flip them.
+                const resultData = {
+                    ...data.payload,
+                    // Flip the scores and move text for the receiver's perspective
+                    yourMoveText: data.payload.partnerMoveText,
+                    partnerMoveText: data.payload.yourMoveText,
+                    playerScore: data.payload.receiverScore,
+                    partnerScore: data.payload.initiatorScore,
+                };
+                processRoundResult(resultData);
             }
             break;
 
@@ -2283,6 +2334,9 @@ function handleRoomDataReceived(senderId, data) {
             console.log(`Received orchestrator output from ${senderId}`);
             currentOrchestratorText = data.payload; // Capture the orchestrator output
             if (isDateActive && !amIPlayer1) {
+                 // Player 2 receives the orchestrator output.
+                 // The main turn generation is complete, so the minigame can end.
+                endMinigame();
                 generateLocalTurn(data.payload, 'player2');
             }
             break;
@@ -2333,12 +2387,28 @@ function handleRoomDataReceived(senderId, data) {
             // This message is sent BY Player 1 TO Player 2.
             // Therefore, only Player 2 should act on it.
             if (!amIPlayer1) {
-                console.log("Received delegation from Player 1 to generate minigame data.");
+                console.log("Received delegation from Player 1. Starting minigame UI and generating data.");
+                // Player 2 starts the minigame UI immediately, just like Player 1.
+                startMinigame(minigameCompletionHandler);
+
                 getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(data => {
                     if (data) {
                         console.log("Minigame data generated by Player 2, broadcasting to room...");
                         // Broadcast the generated data for both players to use.
                         MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
+
+                        // Manually process the data locally for Player 2, since broadcast doesn't send to self.
+                        minigameActionData = data;
+                        console.log("Player 2 is processing generated minigame data locally.");
+                        resetRoundUI();
+
+                        // Asynchronously preload data for the next round
+                        getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
+                            preloadedMinigameData = preloadData;
+                            // Only Player 2 needs to know about this. No need to broadcast.
+                            console.log("Preloaded data for next minigame round.");
+                        });
+
                     } else {
                         showError("Could not generate minigame actions as Player 2.");
                     }
@@ -2909,22 +2979,26 @@ async function fetchFirstTurn(minigameWinner, scene) {
     const localProfile = getLocalProfile();
     const profileString = `Player A's saved profile: ${JSON.stringify(localProfile)}. If profile data exists, use it when creating the notes and UI. Otherwise, ensure the UI probes for it.`;
 
-    // For the first turn, there are no previous actions or notes.
-    // The orchestrator will be guided by the 'firstrun_addendum'.
+    // For the first turn, there are no previous actions. The "analysis" serves as the setup instructions.
     const initialTurnData = {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
-        // The notes provide a clear starting point for the orchestrator AI.
-        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
-        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
+        playerA_analysis: {
+            green_flags: "N/A",
+            red_flags: "N/A",
+            clinical_report: `This is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`
+        },
+        playerB_analysis: {
+            green_flags: "N/A",
+            red_flags: "N/A",
+            clinical_report: `This is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`
+        },
         isExplicit: isDateExplicit,
-        minigameWinner: minigameWinner, // This will be null, but we pass it anyway
-        // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
+        minigameWinner: minigameWinner,
         isFirstTurn: true
     };
 
     // We can now just call the same function used for all subsequent turns.
-    // This simplifies the logic and ensures consistency.
     await initiateTurnAsPlayer1(initialTurnData);
 }
 
@@ -3403,33 +3477,32 @@ function endSpinner() {
     console.log("All spinners stopped. Final results:", finalResults);
 
     if (finalResults.length === activeSpinners.length) {
-        if (spinnerResult) {
-            spinnerResult.className = 'spinner-result'; // Reset classes
-            spinnerResult.style.display = 'block';
-            spinnerResult.innerHTML = '...';
+        // --- NEW: Highlight winners in the legend ---
+        activeSpinners.forEach(spinner => {
+            if (spinner.result) {
+                const legendId = spinner.wheelElement.id.replace('wheel', 'legend');
+                const legend = document.getElementById(legendId);
+                if (legend) {
+                    const legendItems = legend.querySelectorAll('.legend-item');
+                    legendItems.forEach(item => {
+                        // Using .includes() for robustness, in case of extra spaces or "(x2)"
+                        if (item.textContent.includes(spinner.result)) {
+                            item.classList.add('winner');
+                        }
+                    });
+                }
+            }
+        });
+        // --- END NEW ---
 
-            setTimeout(() => {
-                spinnerResult.innerHTML = `Location: <strong>${finalResults[0]}</strong>`;
-            }, 500);
-
-            setTimeout(() => {
-                spinnerResult.innerHTML += `<br>Vibe: <strong>${finalResults[1]}</strong>`;
-            }, 1500);
-
-            setTimeout(() => {
-                spinnerResult.innerHTML += `<br>Wildcard: <strong>${finalResults[2]}</strong>`;
-                spinnerResult.classList.add('final-result-pop'); // Add class for animation
-            }, 2500);
-        }
-
-        // Hide modal and fire callback after the full reveal, with a longer delay
+        // Hide modal and fire callback after a short delay
         setTimeout(() => {
             if (spinnerModal) spinnerModal.style.display = 'none';
             if (spinnerCompletionCallback) {
                 spinnerCompletionCallback(finalResults);
             }
             activeSpinners = [];
-        }, 6500); // Increased delay
+        }, 4000); // Increased delay to 4s as per user feedback
     } else {
         console.error("Mismatch in spinner results. Aborting.");
         setTimeout(() => {
@@ -3438,7 +3511,7 @@ function endSpinner() {
                 spinnerCompletionCallback([]);
             }
             activeSpinners = [];
-        }, 2000);
+        }, 1500);
     }
 }
 
@@ -3446,21 +3519,27 @@ function endSpinner() {
 function handleSpinnerStateUpdate(spinnersState) {
     if (amIPlayer1) return;
 
+    let allStopped = true;
     spinnersState.forEach(state => {
         const localSpinner = activeSpinners.find(s => s.id === state.id);
         if (localSpinner) {
             localSpinner.angle = state.angle;
             localSpinner.isSpinning = state.isSpinning;
-            localSpinner.result = state.result;
+            localSpinner.result = state.result; // Make sure result is updated
             localSpinner.wheelElement.style.transform = `rotate(${state.angle}rad)`;
+
+            if (state.isSpinning) {
+                allStopped = false;
+            }
         }
     });
 
     // If all have stopped, end the spinner on the client side
-    if (spinnersState.every(s => !s.isSpinning)) {
+    if (allStopped) {
+        console.log("Player 2 detected all spinners stopped, ending spinner.");
         endSpinner();
     } else {
-         // keep animation frame running
+         // keep animation frame running if any spinner is still going
         requestAnimationFrame(runSpinnerAnimation);
     }
 }

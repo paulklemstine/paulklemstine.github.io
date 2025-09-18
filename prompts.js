@@ -185,13 +185,22 @@ You must generate a set of actions for an "Initiator" and a "Receiver".
     *   Generate a list of 8 unique, creative actions for the 'receiver'.
     *   Actions should be short phrases (2-4 words). Use snake_case for the values (e.g., "go_for_a_kiss").
 
+2.  **Hints:**
+    *   For EACH action, you MUST provide a short, flavorful hint (5-10 words). This hint should give the player a clue about the potential outcome or tone of the action without giving everything away.
+
 **Output Format:**
 Return ONLY a single, valid JSON object. Do not include any other text or markdown.
 
-The final JSON object MUST have this exact structure:
+The final JSON object MUST have this exact structure, with each action being an object containing "action" and "hint" keys:
 {
-  "initiator_actions": ["action_one", "action_two", ...],
-  "receiver_actions": ["response_one", "response_two", ...]
+  "initiator_actions": [
+    { "action": "action_one", "hint": "A subtle hint about what might happen." },
+    { "action": "action_two", "hint": "Another clever hint." }
+  ],
+  "receiver_actions": [
+    { "action": "response_one", "hint": "Hint for the receiver's response." },
+    { "action": "response_two", "hint": "Another hint for the receiver." }
+  ]
 }
 `;
 
