@@ -2144,8 +2144,8 @@ function resetRoundUI() {
     selectedActions.forEach(actionObj => {
         const button = document.createElement('button');
         button.className = 'geems-button minigame-button';
-        button.textContent = actionObj.action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); // Capitalize words
-        button.title = actionObj.hint; // Set the hint as a tooltip
+        const actionText = actionObj.action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        button.textContent = `${actionText} (${actionObj.hint})`;
         button.onclick = () => handlePlayerMove(actionObj.action);
         if (buttonContainer) {
             buttonContainer.appendChild(button);
