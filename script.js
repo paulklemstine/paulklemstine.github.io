@@ -2923,22 +2923,26 @@ async function fetchFirstTurn(minigameWinner, scene) {
     const localProfile = getLocalProfile();
     const profileString = `Player A's saved profile: ${JSON.stringify(localProfile)}. If profile data exists, use it when creating the notes and UI. Otherwise, ensure the UI probes for it.`;
 
-    // For the first turn, there are no previous actions or notes.
-    // The orchestrator will be guided by the 'firstrun_addendum'.
+    // For the first turn, there are no previous actions. The "analysis" serves as the setup instructions.
     const initialTurnData = {
         playerA_actions: { turn: 0, action: "game_start" },
         playerB_actions: { turn: 0, action: "game_start" },
-        // The notes provide a clear starting point for the orchestrator AI.
-        playerA_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`,
-        playerB_notes: `## Dr. Gemini's Log\nThis is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`,
+        playerA_analysis: {
+            green_flags: "N/A",
+            red_flags: "N/A",
+            clinical_report: `This is the very first turn of a new blind date. The scene is: ${scene}. As Player 1, I have arrived first. Please generate a new scene and starting UI for both players. ${profileString}`
+        },
+        playerB_analysis: {
+            green_flags: "N/A",
+            red_flags: "N/A",
+            clinical_report: `This is the very first turn of a new blind date. The scene is: ${scene}. As Player 2, I am just arriving. Please generate a new scene and starting UI for both players.`
+        },
         isExplicit: isDateExplicit,
-        minigameWinner: minigameWinner, // This will be null, but we pass it anyway
-        // Add a flag to indicate this is the first turn, so the prompt can be adjusted.
+        minigameWinner: minigameWinner,
         isFirstTurn: true
     };
 
     // We can now just call the same function used for all subsequent turns.
-    // This simplifies the logic and ensures consistency.
     await initiateTurnAsPlayer1(initialTurnData);
 }
 
