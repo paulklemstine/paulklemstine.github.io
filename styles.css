@@ -910,3 +910,13 @@ body {
 #first-date-loading-modal .modal-content {
     max-width: 500px;
 }
+
+.legend-item.winner {
+    background-color: #e0e7ff;
+    color: #312e81;
+    font-weight: bold;
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin: -2px -6px; /* Counteract padding to avoid layout shift */
+    transition: all 0.3s ease;
+}

@@ -793,17 +793,19 @@ function checkForTurnPackages() {
             playerB_analysis: packageB.analysis,
             isExplicit: isDateExplicit,
             history: historyQueue,
-            minigameWinner: lastMinigameWinner
+            minigameWinner: lastMinigameWinner // Use winner from the *previous* turn's minigame
         };
 
         initiateTurnAsPlayer1(turnData);
-        lastMinigameWinner = null; // Reset winner after use
         turnPackages.clear(); // Clear packages for the next turn
 
-        // Player 1 now delegates the minigame generation to Player 2 to run in parallel.
+        // Player 1 now delegates the minigame generation to Player 2 to run in parallel,
+        // and both players will start the minigame UI immediately.
         if (partnerRoomId) {
-            console.log("Delegating minigame generation to Player 2.");
+            console.log("Delegating minigame generation to Player 2 and starting minigame locally.");
+            lastMinigameWinner = null; // Reset for the new game that's about to start.
             MPLib.sendDirectToRoomPeer(partnerRoomId, { type: 'generate_minigame_data' });
+            startMinigame(minigameCompletionHandler); // P1 starts their minigame UI immediately.
         } else {
             console.error("Could not find partner to delegate minigame generation.");
             // Handle error case, maybe by P1 generating it anyway? For now, just log.
@@ -1931,7 +1933,7 @@ function handleRoomPeerLeft(peerId) {
 // --- Minigame Functions ---
 
 async function startMinigame(onComplete) {
-    console.log("Starting 'Make a Move' Minigame...");
+    console.log("Starting 'Make a Move' Minigame UI...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
     minigameRound = 1;
@@ -1954,38 +1956,14 @@ async function startMinigame(onComplete) {
     }
     updateScoreboard();
 
+    // The UI is now symmetrical. Both players see a loading state.
+    // Player 2 is responsible for generating and broadcasting the data.
+    minigameTitle.textContent = "Make a Move";
+    roundResultDisplay.textContent = "Waiting for game data to be generated...";
 
-    // Player 1 is responsible for generating and distributing the game data
-    if (amIPlayer1) {
-        minigameTitle.textContent = "Generating Actions...";
-        try {
-            const data = await getMinigameActions(isDateExplicit, callGeminiApiWithRetry);
-            if (data) {
-                minigameActionData = data;
-                MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
-                console.log("Minigame data generated and broadcasted.");
-                // Preload the next turn's data immediately
-                getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
-                    preloadedMinigameData = preloadData;
-                    MPLib.broadcastToRoom({ type: 'minigame_preload_data', payload: preloadData });
-                    console.log("Preloaded minigame data for next round and sent to partner.");
-                });
-                minigameTitle.textContent = "Make a Move";
-                resetRoundUI(); // Now we can setup the UI
-            } else {
-                showError("Could not generate minigame actions. Closing minigame.");
-                setTimeout(endMinigame, 3000);
-            }
-        } catch (error) {
-            console.error("Error getting minigame actions:", error);
-            showError("Failed to start minigame due to an API error.");
-            setTimeout(endMinigame, 3000);
-        }
-    } else {
-        // Player 2 just waits for the data
-        minigameTitle.textContent = "Partner is Generating Actions...";
-        roundResultDisplay.textContent = "Waiting for partner to create the game...";
-    }
+    // Hide controls until data arrives
+    initiatorControls.style.display = 'none';
+    receiverControls.style.display = 'none';
 }
 
 function handlePlayerMove(move) {
@@ -2183,6 +2161,19 @@ function setMoveButtonsDisabled(disabled) {
     });
 }
 
+function minigameCompletionHandler(winner) {
+    // The winner is 'player' if the local player won, 'partner' if the remote player won.
+    // The orchestrator expects to know who Player A and Player B are.
+    if (winner === 'draw') {
+        lastMinigameWinner = null;
+    } else if (winner === 'player') {
+        lastMinigameWinner = amIPlayer1 ? 'playerA' : 'playerB';
+    } else if (winner === 'partner') {
+        lastMinigameWinner = amIPlayer1 ? 'playerB' : 'playerA';
+    }
+    console.log(`Minigame complete. Stored winner for next turn: ${lastMinigameWinner}`);
+}
+
 function handleRoomDataReceived(senderId, data) {
     console.log(`MPLib Event: Room data received from ${senderId.slice(-6)}`, data);
     if (!data || !data.type) {
@@ -2231,9 +2222,10 @@ function handleRoomDataReceived(senderId, data) {
         // and P2 calls it when all spinners stop spinning in the state update.
 
         case 'minigame_data':
-            if (minigameActive && !amIPlayer1) {
+            // This is now received by both players, including Player 2 who generated it.
+            if (minigameActive) {
                 minigameActionData = data.payload;
-                console.log("Received minigame data from Player 1.", minigameActionData);
+                console.log("Received minigame data broadcast.", minigameActionData);
                 resetRoundUI(); // Now that we have data, setup the UI
             }
             break;
@@ -2282,8 +2274,17 @@ function handleRoomDataReceived(senderId, data) {
         case 'orchestrator_output':
             console.log(`Received orchestrator output from ${senderId}`);
             currentOrchestratorText = data.payload; // Capture the orchestrator output
-            if (isDateActive && !amIPlayer1) {
-                generateLocalTurn(data.payload, 'player2');
+            if (isDateActive) {
+                // Player 1, upon receiving their own broadcast, also ends the minigame.
+                if (amIPlayer1) {
+                    endMinigame();
+                }
+                // Player 2 receives the orchestrator output.
+                // The main turn generation is complete, so the minigame can end.
+                else {
+                    endMinigame();
+                    generateLocalTurn(data.payload, 'player2');
+                }
             }
             break;
         case 'profile_update':
@@ -2333,12 +2334,23 @@ function handleRoomDataReceived(senderId, data) {
             // This message is sent BY Player 1 TO Player 2.
             // Therefore, only Player 2 should act on it.
             if (!amIPlayer1) {
-                console.log("Received delegation from Player 1 to generate minigame data.");
+                console.log("Received delegation from Player 1. Starting minigame UI and generating data.");
+                // Player 2 starts the minigame UI immediately, just like Player 1.
+                startMinigame(minigameCompletionHandler);
+
                 getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(data => {
                     if (data) {
                         console.log("Minigame data generated by Player 2, broadcasting to room...");
                         // Broadcast the generated data for both players to use.
                         MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
+
+                        // Asynchronously preload data for the next round
+                        getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
+                            preloadedMinigameData = preloadData;
+                            // Only Player 2 needs to know about this. No need to broadcast.
+                            console.log("Preloaded data for next minigame round.");
+                        });
+
                     } else {
                         showError("Could not generate minigame actions as Player 2.");
                     }
@@ -3403,33 +3415,32 @@ function endSpinner() {
     console.log("All spinners stopped. Final results:", finalResults);
 
     if (finalResults.length === activeSpinners.length) {
-        if (spinnerResult) {
-            spinnerResult.className = 'spinner-result'; // Reset classes
-            spinnerResult.style.display = 'block';
-            spinnerResult.innerHTML = '...';
+        // --- NEW: Highlight winners in the legend ---
+        activeSpinners.forEach(spinner => {
+            if (spinner.result) {
+                const legendId = spinner.wheelElement.id.replace('wheel', 'legend');
+                const legend = document.getElementById(legendId);
+                if (legend) {
+                    const legendItems = legend.querySelectorAll('.legend-item');
+                    legendItems.forEach(item => {
+                        // Using .includes() for robustness, in case of extra spaces or "(x2)"
+                        if (item.textContent.includes(spinner.result)) {
+                            item.classList.add('winner');
+                        }
+                    });
+                }
+            }
+        });
+        // --- END NEW ---
 
-            setTimeout(() => {
-                spinnerResult.innerHTML = `Location: <strong>${finalResults[0]}</strong>`;
-            }, 500);
-
-            setTimeout(() => {
-                spinnerResult.innerHTML += `<br>Vibe: <strong>${finalResults[1]}</strong>`;
-            }, 1500);
-
-            setTimeout(() => {
-                spinnerResult.innerHTML += `<br>Wildcard: <strong>${finalResults[2]}</strong>`;
-                spinnerResult.classList.add('final-result-pop'); // Add class for animation
-            }, 2500);
-        }
-
-        // Hide modal and fire callback after the full reveal, with a longer delay
+        // Hide modal and fire callback after a short delay
         setTimeout(() => {
             if (spinnerModal) spinnerModal.style.display = 'none';
             if (spinnerCompletionCallback) {
                 spinnerCompletionCallback(finalResults);
             }
             activeSpinners = [];
-        }, 6500); // Increased delay
+        }, 2000); // Significantly reduced delay
     } else {
         console.error("Mismatch in spinner results. Aborting.");
         setTimeout(() => {
@@ -3438,7 +3449,7 @@ function endSpinner() {
                 spinnerCompletionCallback([]);
             }
             activeSpinners = [];
-        }, 2000);
+        }, 1500);
     }
 }
 
@@ -3446,21 +3457,27 @@ function endSpinner() {
 function handleSpinnerStateUpdate(spinnersState) {
     if (amIPlayer1) return;
 
+    let allStopped = true;
     spinnersState.forEach(state => {
         const localSpinner = activeSpinners.find(s => s.id === state.id);
         if (localSpinner) {
             localSpinner.angle = state.angle;
             localSpinner.isSpinning = state.isSpinning;
-            localSpinner.result = state.result;
+            localSpinner.result = state.result; // Make sure result is updated
             localSpinner.wheelElement.style.transform = `rotate(${state.angle}rad)`;
+
+            if (state.isSpinning) {
+                allStopped = false;
+            }
         }
     });
 
     // If all have stopped, end the spinner on the client side
-    if (spinnersState.every(s => !s.isSpinning)) {
+    if (allStopped) {
+        console.log("Player 2 detected all spinners stopped, ending spinner.");
         endSpinner();
     } else {
-         // keep animation frame running
+         // keep animation frame running if any spinner is still going
         requestAnimationFrame(runSpinnerAnimation);
     }
 }
