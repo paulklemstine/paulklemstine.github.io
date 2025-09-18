@@ -1985,66 +1985,75 @@ function checkForRoundCompletion() {
     if (playerMove && partnerMove) {
         const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
 
-        let initiatorMove, receiverMove;
+        // Only the initiator for the round calculates and broadcasts the result.
         if (iAmInitiator) {
-            initiatorMove = playerMove;
-            receiverMove = partnerMove;
-        } else {
-            initiatorMove = partnerMove;
-            receiverMove = playerMove;
-        }
+            console.log(`Round ${minigameRound} complete. As initiator, calculating result...`);
+            const yourMoveText = playerMove.replace(/_/g, ' ');
+            const partnerMoveText = partnerMove.replace(/_/g, ' ');
+            roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.<br>Figuring out what happens...`;
 
-        console.log(`Round ${minigameRound} complete. Initiator: ${initiatorMove}, Receiver: ${receiverMove}`);
+            setTimeout(async () => {
+                try {
+                    const context = historyQueue.length > 0 ?
+                        JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
+                        : "It's the beginning of the date.";
 
-        const yourMoveText = playerMove.replace(/_/g, ' ');
-        const partnerMoveText = partnerMove.replace(/_/g, ' ');
-        roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.<br>Figuring out what happens...`;
-
-        // Wait a moment before revealing the winner
-        setTimeout(async () => {
-            try {
-                const context = historyQueue.length > 0 ?
-                    JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
-                    : "It's the beginning of the date.";
-
-                const outcome = await getMinigameOutcome(initiatorMove, receiverMove, context, isDateExplicit, callGeminiApiWithRetry);
-
-                if (outcome && resultImage && resultNarrative && graphicalResultDisplay) {
-                    resultNarrative.textContent = outcome.narrative;
-                    const randomSeed = Math.floor(Math.random() * 65536);
-                    resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(outcome.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
-                    graphicalResultDisplay.classList.remove('hidden');
+                    const outcome = await getMinigameOutcome(playerMove, partnerMove, context, isDateExplicit, callGeminiApiWithRetry);
 
                     let roundMessage = "The outcome is a draw!";
-                    const winner = outcome.winner;
-                    if (winner && winner !== 'draw') {
-                        const iAmWinner = (iAmInitiator && winner === 'initiator') || (!iAmInitiator && winner === 'receiver');
-                        if (iAmWinner) {
-                            playerScore++;
-                            roundMessage = "You won the moment!";
-                        } else {
-                            partnerScore++;
-                            roundMessage = "Your partner won the moment.";
+                    let winner = 'draw';
+                    let newPlayerScore = playerScore;
+                    let newPartnerScore = partnerScore;
+
+                    if (outcome) {
+                        winner = outcome.winner;
+                        if (winner && winner !== 'draw') {
+                            const initiatorIsWinner = winner === 'initiator';
+                            if (initiatorIsWinner) {
+                                newPlayerScore++;
+                                roundMessage = "You won the moment!";
+                            } else {
+                                newPartnerScore++;
+                                roundMessage = "Your partner won the moment.";
+                            }
                         }
                     }
-                    roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>. <br><strong>${roundMessage}</strong>`;
-                    updateScoreboard();
-                } else {
-                     roundResultDisplay.innerHTML += `<br>Could not determine the outcome. Let's call it a draw.`;
+
+                    const resultPayload = {
+                        narrative: outcome?.narrative || "The moment was ambiguous, a draw.",
+                        image_prompt: outcome?.image_prompt || "cinematic anime, two people looking at each other with confusion",
+                        roundMessage: roundMessage,
+                        yourMoveText: yourMoveText,
+                        partnerMoveText: partnerMoveText,
+                        // Send scores from the initiator's perspective
+                        initiatorScore: newPlayerScore,
+                        receiverScore: newPartnerScore
+                    };
+
+                    // Broadcast the definitive result to the partner
+                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: resultPayload });
+
+                    // Process the result locally for the initiator
+                    processRoundResult(resultPayload);
+
+                } catch (e) {
+                    console.error("Could not generate round outcome:", e);
+                    const errorPayload = {
+                         narrative: "An error occurred trying to determine the outcome.",
+                         image_prompt: "cinematic anime, a broken mirror, confusion and glitches",
+                         roundMessage: "An error occurred.",
+                         yourMoveText: yourMoveText,
+                         partnerMoveText: partnerMoveText,
+                         initiatorScore: playerScore,
+                         receiverScore: partnerScore
+                    };
+                     MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: errorPayload });
+                     processRoundResult(errorPayload);
                 }
-
-                minigameRound++;
-                player1IsInitiator = !player1IsInitiator;
-                setTimeout(resetRoundUI, 8000);
-
-            } catch (e) {
-                console.error("Could not generate round outcome:", e);
-                roundResultDisplay.innerHTML += `<br>An error occurred. Let's call it a draw and continue.`;
-                minigameRound++;
-                player1IsInitiator = !player1IsInitiator;
-                setTimeout(resetRoundUI, 5000);
-            }
-        }, 2500);
+            }, 1000); // Shortened delay to start result calculation
+        } else {
+             console.log(`Round ${minigameRound} complete. As receiver, waiting for result...`);
+        }
     }
 }
 
@@ -2132,11 +2141,12 @@ function resetRoundUI() {
     // Shuffle and pick 4 actions
     const selectedActions = actionsToShow.sort(() => 0.5 - Math.random()).slice(0, 4);
 
-    selectedActions.forEach(action => {
+    selectedActions.forEach(actionObj => {
         const button = document.createElement('button');
         button.className = 'geems-button minigame-button';
-        button.textContent = action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); // Capitalize words
-        button.onclick = () => handlePlayerMove(action);
+        button.textContent = actionObj.action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()); // Capitalize words
+        button.title = actionObj.hint; // Set the hint as a tooltip
+        button.onclick = () => handlePlayerMove(actionObj.action);
         if (buttonContainer) {
             buttonContainer.appendChild(button);
         }
@@ -2250,6 +2260,23 @@ function handleRoomDataReceived(senderId, data) {
             if (button) {
                 button.disabled = false;
                 button.textContent = 'Propose Date';
+            }
+            break;
+        case 'minigame_round_result':
+            // The receiver gets the definitive result from the initiator.
+            console.log("Received definitive round result from initiator.");
+            const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
+             if (!iAmInitiator) {
+                // The payload scores are from the initiator's perspective. We need to flip them.
+                const resultData = {
+                    ...data.payload,
+                    // Flip the scores and move text for the receiver's perspective
+                    yourMoveText: data.payload.partnerMoveText,
+                    partnerMoveText: data.payload.yourMoveText,
+                    playerScore: data.payload.receiverScore,
+                    partnerScore: data.payload.initiatorScore,
+                };
+                processRoundResult(resultData);
             }
             break;
 
