@@ -254,7 +254,7 @@ ${notes}
 /** Saves the current essential game state to local storage. */
 function autoSaveGameState() {
     if (!apiKeyLocked) return;
-    if (!currentUiJson || !historyQueue) return;
+    // Removed the check for currentUiJson to allow saving state even before the first turn.
     const rawApiKey = apiKeyInput.value.trim();
     if (!rawApiKey) return;
     try {
@@ -263,10 +263,17 @@ function autoSaveGameState() {
             currentUiJson: currentUiJson,
             historyQueue: historyQueue,
             isExplicitMode: isExplicitMode,
-            currentModelIndex: currentModelIndex
+            currentModelIndex: currentModelIndex,
+            // --- New additions for reconnection ---
+            isDateActive: isDateActive,
+            currentPartnerId: currentPartnerId, // This is the Room ID of the partner
+            amIPlayer1: amIPlayer1,
+            isDateExplicit: isDateExplicit,
+            // We also need to know the partner's master ID to find them across rooms
+            currentPartnerMasterId: isDateActive ? MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId : null
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
-        console.log("Game state auto-saved.");
+        console.log("Game state auto-saved.", stateToSave);
     } catch (error) {
         console.error("Error during auto-save:", error);
         showError("Error auto-saving game state.");
@@ -1835,6 +1842,35 @@ function handleRoomConnected(id) {
             isPublic: currentRoomIsPublic
         }
     });
+
+    // --- Reconnection Logic ---
+    if (reconnectionPartnerMasterId) {
+        console.log("Room connected, now checking for reconnection partner...");
+        const connections = MPLib.getRoomConnections();
+        let partnerFound = false;
+        for (const [roomId, conn] of connections.entries()) {
+            if (conn.metadata?.masterId === reconnectionPartnerMasterId) {
+                console.log(`Reconnection partner found! New Room ID: ${roomId}`);
+                currentPartnerId = roomId; // This is the new room ID for the partner
+                partnerFound = true;
+                break;
+            }
+        }
+
+        if (partnerFound) {
+            showNotification("Successfully reconnected to your partner!", "success");
+            const savedState = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY));
+            restoreDateState(savedState); // Use the new comprehensive function
+        } else {
+            console.log("Reconnection partner not found in the current room. The date has ended.");
+            showError("Your previous partner could not be found. The date has ended.");
+            isDateActive = false;
+            autoSaveGameState(); // Persist the ended date
+            renderLobby(); // Go back to the lobby
+        }
+        // Reset the global variable to prevent this logic from running again
+        reconnectionPartnerMasterId = null;
+    }
 }
 
 function handleRoomPeerJoined(peerId, conn) {
@@ -1867,11 +1903,16 @@ function handleRoomPeerLeft(peerId) {
     if (isDateActive && peerId === currentPartnerId) {
         console.log("Dating partner has disconnected. Ending date.");
         showError("Your partner has disconnected. The date has ended.");
-        // Reset date state variables
+
+        // Reset date state variables FIRST
         isDateActive = false;
         currentPartnerId = null;
         amIPlayer1 = false;
         turnPackages.clear();
+
+        // Persist the fact that the date has ended. This will now save with isDateActive = false.
+        autoSaveGameState();
+
         // Now, it's safe to render the lobby, which will show the lobby and hide the game.
         renderLobby();
         return; // Important to stop here.
@@ -2571,26 +2612,39 @@ function renderLobby() {
 
             if (!player.isLocal) {
                 const button = document.createElement('button');
-                button.className = 'geems-button propose-date-button';
-                button.dataset.masterId = player.id; // Store the persistent masterId
+                button.className = 'geems-button';
+                button.dataset.masterId = player.id;
 
-                if (player.roomConnection && player.roomConnection.open) {
-                    button.textContent = 'Propose Date';
-                    button.disabled = false;
+                // Check if there's a restorable game with this player
+                const savedStateJSON = localStorage.getItem(LOCAL_STORAGE_KEY);
+                let savedState = null;
+                if (savedStateJSON) {
+                    try { savedState = JSON.parse(savedStateJSON); } catch (e) {}
+                }
+
+                if (savedState && savedState.isDateActive && savedState.currentPartnerMasterId === player.id) {
+                    button.textContent = 'Resume Date';
+                    button.classList.add('resume-date-button');
                     button.onclick = (event) => {
                         const targetMasterId = event.target.dataset.masterId;
-
-                        // Find the correct room connection using the masterId
-                        const connections = MPLib.getRoomConnections();
-                        let targetRoomId = null;
-                        for (const [roomId, conn] of connections.entries()) {
-                            if (conn.metadata?.masterId === targetMasterId) {
-                                targetRoomId = roomId;
-                                break;
-                            }
+                        console.log(`Attempting to resume date with ${targetMasterId}`);
+                        const roomConnection = Array.from(MPLib.getRoomConnections().values()).find(conn => conn.metadata?.masterId === targetMasterId);
+                        if (roomConnection) {
+                            currentPartnerId = roomConnection.peer; // Set the partner's current room ID
+                            restoreDateState(savedState); // Use the new comprehensive function
+                        } else {
+                            showError("Could not find that player. They may have left the room.");
                         }
+                    };
+                } else {
+                    button.textContent = 'Propose Date';
+                    button.classList.add('propose-date-button');
+                    button.onclick = (event) => {
+                        const targetMasterId = event.target.dataset.masterId;
+                        const roomConnection = Array.from(MPLib.getRoomConnections().values()).find(conn => conn.metadata?.masterId === targetMasterId);
 
-                        if (targetRoomId) {
+                        if (roomConnection) {
+                            const targetRoomId = roomConnection.peer;
                             console.log(`Proposing date to masterId ${targetMasterId.slice(-6)} (via roomId ${targetRoomId.slice(-6)})`);
                             const payload = { proposerExplicitMode: isExplicitMode };
                             MPLib.sendDirectToRoomPeer(targetRoomId, { type: 'date_proposal', payload: payload });
@@ -2598,12 +2652,13 @@ function renderLobby() {
                             event.target.textContent = 'Request Sent';
                         } else {
                             showError("Could not find the player to send the proposal. They may have disconnected.");
-                            console.error("Failed to find room connection for masterId:", targetMasterId);
                         }
                     };
-                } else {
-                    button.textContent = 'Connecting...';
-                    button.disabled = true;
+                }
+
+                if (!player.roomConnection || !player.roomConnection.open) {
+                     button.textContent = 'Connecting...';
+                     button.disabled = true;
                 }
                 card.appendChild(button);
             } else {
@@ -2667,6 +2722,9 @@ async function startNewDate(partnerId, iAmPlayer1) {
     amIPlayer1 = iAmPlayer1;
     turnPackages.clear();
     sceneSelections.clear();
+
+    // Save the initial state of the new date
+    autoSaveGameState();
 
     // Hide lobby, show game
     const directoryContainer = document.getElementById('global-directory-container');
@@ -2941,29 +2999,73 @@ function switchToRoom(roomName, isPublic) {
     // of our new location once the connection is established.
 }
 
+function restoreDateState(savedState) {
+    console.log("Restoring full date state...");
+    // Restore the underlying application state
+    isDateActive = true;
+    amIPlayer1 = savedState.amIPlayer1;
+    isDateExplicit = savedState.isDateExplicit;
+    // The partner's room ID should have been found and set before this function is called.
+    // We log here to ensure it's correct.
+    console.log(`Restored date state. Partner Room ID: ${currentPartnerId}`);
+
+    // Now, restore the visual part of the game
+    restoreGameUI(savedState);
+}
+
+function restoreGameUI(savedState) {
+    // This function will handle the visual restoration of the game
+    if (savedState.currentUiJson) {
+        renderUI(savedState.currentUiJson);
+        apiKeyLocked = true;
+        resetGameButton.disabled = false;
+        if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
+        if(gameWrapper) gameWrapper.style.display = 'block';
+        if(lobbyContainer) lobbyContainer.style.display = 'none';
+         const directoryContainer = document.getElementById('global-directory-container');
+        if(directoryContainer) directoryContainer.style.display = 'none';
+
+    }
+    updateModeButtonVisuals();
+    updateModelToggleVisuals();
+}
+
+
+// --- New global for reconnection ---
+let reconnectionPartnerMasterId = null;
+
 function loadGameStateFromStorage() {
     const savedStateJSON = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (savedStateJSON) {
         try {
             const savedState = JSON.parse(savedStateJSON);
-            // Restore state, with fallbacks for safety
+            console.log("Game state loaded from localStorage:", savedState);
+
+            // Restore non-UI state variables first
             currentUiJson = savedState.currentUiJson || null;
             historyQueue = savedState.historyQueue || [];
             isExplicitMode = savedState.isExplicitMode || false;
             currentModelIndex = savedState.currentModelIndex || 0;
 
-            console.log("Game state loaded from localStorage.");
+            // --- Reconnection Logic ---
+            if (savedState.isDateActive && savedState.currentPartnerMasterId) {
+                console.log(`Found an active date with partner ${savedState.currentPartnerMasterId}. Will attempt to reconnect.`);
+                // Set the global variable to be checked later, when the room is connected.
+                reconnectionPartnerMasterId = savedState.currentPartnerMasterId;
 
-            // Update UI based on loaded state
-            if (currentUiJson) {
-                renderUI(currentUiJson);
-                apiKeyLocked = true; // If we have game state, key must have been locked
-                resetGameButton.disabled = false;
-                 if(lobbySelectionScreen) lobbySelectionScreen.style.display = 'none';
-                 if(gameWrapper) gameWrapper.style.display = 'block';
+                // Pre-load the rest of the date state
+                isDateActive = true;
+                amIPlayer1 = savedState.amIPlayer1;
+                isDateExplicit = savedState.isDateExplicit;
+                currentPartnerId = null; // We don't know their new room ID yet
+
+                // Don't render the UI yet. Wait until the connection is confirmed.
+                showNotification("Found a previous date. Attempting to reconnect...", "info");
+                return; // Wait for MPLib initialization
             }
-            updateModeButtonVisuals();
-            updateModelToggleVisuals();
+
+            // If no active date, restore UI for a non-game state (e.g., if user was in the middle of typing)
+            restoreGameUI(savedState);
 
         } catch (error) {
             console.error("Error loading game state from localStorage:", error);
