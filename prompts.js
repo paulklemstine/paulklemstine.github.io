@@ -36,6 +36,7 @@ master_ui_prompt: `// GEEMS MASTER UI PROTOCOL V4.0 - JSON ONLY
 //         - radio (Choose One): For mutually exclusive options. The \`value\` MUST be a JSON-escaped string representing an array. The predicted choice MUST be prefixed with an asterisk (*). Example: "value": "[\\"*Attack\\", \\"Flee\\", \\"Negotiate\\"]".
 //         - checkbox (Yes/No Choice): For a single binary decision. The label must be a clear yes/no question. The \`value\` MUST be "false" by default.
 //         - slider (Scale): For measuring intensity. The label MUST explicitly state what the min and max values mean. The object MUST include \`min\` and \`max\` attributes as strings. Example: "min": "0", "max": "100".
+//         - Main Action (MANDATORY): You MUST include one and only one radio group with the \`name: "main_action"\`. This represents the primary decision the player must make this turn.
 
 // 5.  **Notes Field (CRITICAL):**
 //     - You MUST include one element with \`type: "hidden"\` and \`name: "notes"\`.
