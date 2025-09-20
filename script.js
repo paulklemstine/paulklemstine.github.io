@@ -639,13 +639,13 @@ async function generateLocalTurn(orchestratorText, playerRole) {
             // Determine which set of flags/reports belong to local vs partner
             const localIsPlayerA = amIPlayer1;
             const localFlags = {
-                green: localIsPlayerA ? pA_green : pB_green,
-                red: localIsPlayerA ? pA_red : pB_red,
+                green: localIsPlayerA ? pB_green : pA_green,
+                red: localIsPlayerA ? pB_red : pA_red,
                 report: ownReport
             };
             const partnerFlags = {
-                green: localIsPlayerA ? pB_green : pA_green,
-                red: localIsPlayerA ? pB_red : pA_red,
+                green: localIsPlayerA ? pA_green : pB_green,
+                red: localIsPlayerA ? pA_red : pB_red,
                 report: partnerReport
             };
 
