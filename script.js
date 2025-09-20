@@ -640,16 +640,16 @@ async function generateLocalTurn(orchestratorText, playerRole, isFirstTurn = fal
             const partnerMasterId = MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId;
             const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile || { name: "Partner" };
 
-            // Determine which set of flags/reports belong to local vs partner
-            const localIsPlayerA = amIPlayer1;
+            // The AI is instructed to generate from the perspective of the current player.
+            // So, "Player A" data should always be for the local user, and "B" for the partner.
             const localFlags = {
-                green: localIsPlayerA ? pA_green : pB_green,
-                red: localIsPlayerA ? pA_red : pB_red,
+                green: pA_green,
+                red: pA_red,
                 report: ownReport
             };
             const partnerFlags = {
-                green: localIsPlayerA ? pB_green : pA_green,
-                red: localIsPlayerA ? pB_red : pA_red,
+                green: pB_green,
+                red: pB_red,
                 report: partnerReport
             };
 
