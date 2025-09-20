@@ -573,14 +573,17 @@ function restoreLocalState() {
  * @param {string} orchestratorText - The full plain text output from the orchestrator.
  * @param {string} playerRole - Either 'player1' or 'player2'.
  */
-async function generateLocalTurn(orchestratorText, playerRole) {
+async function generateLocalTurn(orchestratorText, playerRole, isFirstTurn = false) {
     console.log(`Generating local turn for ${playerRole}...`);
 
     // Reset interstitial title for turn generation
     const interstitialTitle = document.querySelector('#interstitial-screen h2');
     if (interstitialTitle) interstitialTitle.textContent = 'Generating Turn...';
 
-    setLoading(true); // Show interstitial
+    // On the first turn, the spinner modal is the loading screen, so we don't show the interstitial.
+    if (!isFirstTurn) {
+        setLoading(true); // Show interstitial for subsequent turns
+    }
 
     try {
         // Use a robust regex that accepts the new separator or falls back to the old one.
@@ -885,7 +888,7 @@ async function initiateTurnAsPlayer1(turnData) {
 
         // Player 1 generates their own turn locally from the text block,
         // while the spinner/minigame is visually concluding.
-        await generateLocalTurn(orchestratorText, 'player1');
+        await generateLocalTurn(orchestratorText, 'player1', turnData.isFirstTurn);
 
     } catch (error) {
         console.error("Error during orchestrator call:", error);
@@ -2374,7 +2377,7 @@ function handleRoomDataReceived(senderId, data) {
                 stopSpinnerOnWinners();
 
                 // Generate the local turn UI in the background
-                generateLocalTurn(orchestratorText, 'player2');
+                generateLocalTurn(orchestratorText, 'player2', true); // This message type only happens on the first turn
             }
             break;
         case 'profile_update':
@@ -3023,11 +3026,7 @@ function checkForSceneSelectionCompletion() {
 
 async function fetchFirstTurn(minigameWinner, scene) {
     console.log(`Fetching first turn. Minigame winner: ${minigameWinner}, Scene: ${scene}`);
-    const loadingText = document.getElementById('loading-text');
-    if (loadingText) {
-        loadingText.textContent = 'Inventing a new scenario... Please wait.';
-    }
-    setLoading(true, true); // Use the simple spinner for the first turn
+    // The spinner modal is now the loading indicator, so we don't show another one.
 
     // Load the local profile to provide context to the AI if it exists.
     const localProfile = getLocalProfile();
