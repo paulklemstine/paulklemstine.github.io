@@ -2164,8 +2164,6 @@ function handleRoomDataReceived(senderId, data) {
             currentOrchestratorText = data.payload; // Capture the orchestrator output
             if (isDateActive && !amIPlayer1) {
                  // Player 2 receives the orchestrator output.
-                 // The main turn generation is complete, so the minigame can end.
-                endMinigame();
                 generateLocalTurn(data.payload, 'player2');
             }
             break;
