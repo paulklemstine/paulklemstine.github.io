@@ -21,6 +21,7 @@ let llmCallHistory = []; // For the debug panel
 // --- Spinner State ---
 let isSpinnerRunning = false;
 let spinnerCompletionCallback = null;
+let preselectedWinners = null;
 let spinnerAngle = 0;
 let spinnerVelocity = 0;
 let lastSpinnerFrameTime = 0;
@@ -572,14 +573,17 @@ function restoreLocalState() {
  * @param {string} orchestratorText - The full plain text output from the orchestrator.
  * @param {string} playerRole - Either 'player1' or 'player2'.
  */
-async function generateLocalTurn(orchestratorText, playerRole) {
+async function generateLocalTurn(orchestratorText, playerRole, isFirstTurn = false) {
     console.log(`Generating local turn for ${playerRole}...`);
 
     // Reset interstitial title for turn generation
     const interstitialTitle = document.querySelector('#interstitial-screen h2');
     if (interstitialTitle) interstitialTitle.textContent = 'Generating Turn...';
 
-    setLoading(true); // Show interstitial
+    // On the first turn, the spinner modal is the loading screen, so we don't show the interstitial.
+    if (!isFirstTurn) {
+        setLoading(true); // Show interstitial for subsequent turns
+    }
 
     try {
         // Use a robust regex that accepts the new separator or falls back to the old one.
@@ -636,16 +640,16 @@ async function generateLocalTurn(orchestratorText, playerRole) {
             const partnerMasterId = MPLib.getRoomConnections()?.get(currentPartnerId)?.metadata?.masterId;
             const partnerProfile = remoteGameStates.get(partnerMasterId)?.profile || { name: "Partner" };
 
-            // Determine which set of flags/reports belong to local vs partner
-            const localIsPlayerA = amIPlayer1;
+            // The AI is instructed to generate from the perspective of the current player.
+            // So, "Player A" data should always be for the local user, and "B" for the partner.
             const localFlags = {
-                green: localIsPlayerA ? pB_green : pA_green,
-                red: localIsPlayerA ? pB_red : pA_red,
+                green: pA_green,
+                red: pA_red,
                 report: ownReport
             };
             const partnerFlags = {
-                green: localIsPlayerA ? pA_green : pB_green,
-                red: localIsPlayerA ? pA_red : pB_red,
+                green: pB_green,
+                red: pB_red,
                 report: partnerReport
             };
 
@@ -852,17 +856,39 @@ async function initiateTurnAsPlayer1(turnData) {
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
         currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
-        // Now that the orchestrator call is complete, the wait is over. End the minigame.
-        endMinigame();
+        // --- New Flow Control ---
+        if (turnData.isFirstTurn && preselectedWinners) {
+            // This is the first turn, triggered after scene selection.
+            console.log("Orchestrator finished for first turn. Stopping spinners.");
 
-        // Send the entire text block to Player 2
-        MPLib.sendDirectToRoomPeer(currentPartnerId, {
-            type: 'orchestrator_output',
-            payload: orchestratorText
-        });
+            // Broadcast the orchestrator output AND the winners to Player 2
+            MPLib.sendDirectToRoomPeer(currentPartnerId, {
+                type: 'orchestrator_output_and_winners',
+                payload: {
+                    orchestratorText: orchestratorText,
+                    winners: preselectedWinners
+                }
+            });
 
-        // Player 1 generates their own turn locally from the text block
-        await generateLocalTurn(orchestratorText, 'player1');
+            // Stop the spinners locally for Player 1
+            stopSpinnerOnWinners();
+            preselectedWinners = null; // Reset for future turns
+
+        } else {
+            // This is a subsequent turn, likely after a minigame.
+            console.log("Orchestrator finished for subsequent turn. Ending minigame.");
+            endMinigame();
+
+            // Send the entire text block to Player 2
+            MPLib.sendDirectToRoomPeer(currentPartnerId, {
+                type: 'orchestrator_output',
+                payload: orchestratorText
+            });
+        }
+
+        // Player 1 generates their own turn locally from the text block,
+        // while the spinner/minigame is visually concluding.
+        await generateLocalTurn(orchestratorText, 'player1', turnData.isFirstTurn);
 
     } catch (error) {
         console.error("Error during orchestrator call:", error);
@@ -1156,6 +1182,7 @@ function renderSingleElement(element, index) {
             case 'input_dropdown': // Alias for radio
             case 'input_radio_probe': // Alias for radio
             case 'radio_group': // Alias for radio
+            case 'dropdown': // Alias for radio
             case 'radio':
                 renderRadio(wrapper, element, adjustedColor);
                 break;
@@ -2340,6 +2367,20 @@ function handleRoomDataReceived(senderId, data) {
                 generateLocalTurn(data.payload, 'player2');
             }
             break;
+        case 'orchestrator_output_and_winners':
+            console.log(`Received orchestrator output and winners from ${senderId}`);
+            if (isDateActive && !amIPlayer1) {
+                const { orchestratorText, winners } = data.payload;
+                currentOrchestratorText = orchestratorText;
+                preselectedWinners = winners;
+
+                // Stop the spinner on the pre-selected winners
+                stopSpinnerOnWinners();
+
+                // Generate the local turn UI in the background
+                generateLocalTurn(orchestratorText, 'player2', true); // This message type only happens on the first turn
+            }
+            break;
         case 'profile_update':
             console.log(`Received profile update from ${senderId.slice(-6)}`, data.payload);
             // Use the Master ID for storage to keep it consistent
@@ -2906,7 +2947,7 @@ function checkForSceneSelectionCompletion() {
     if (sceneSelections.size < 2) {
         return;
     }
-    console.log("Both players have submitted scene selections.");
+    console.log("Both players have submitted scene selections. Pre-selecting winners and starting orchestrator.");
 
     // Aggregate selections from both players for each category
     const allSelections = { location: [], vibe: [], wildcard: [] };
@@ -2943,37 +2984,50 @@ function checkForSceneSelectionCompletion() {
     const vibeItems = processCategory('vibe');
     const wildcardItems = processCategory('wildcard');
 
-    console.log("Final weighted items for spinners:", {
-        locations: locationItems,
-        vibes: vibeItems,
-        wildcards: wildcardItems
-    });
+    // --- NEW LOGIC ---
+    // 1. Determine the winners beforehand
+    const determineWinner = (items) => {
+        // Prefer an item agreed upon by both players (weight > 1)
+        const agreedWinner = items.find(item => item.weight > 1);
+        if (agreedWinner) return agreedWinner.text;
+        // Otherwise, pick a random one from the available options
+        return items[Math.floor(Math.random() * items.length)].text;
+    };
 
-    // Pass the arrays of weighted items to the new startSpinner function
+    const winningLocation = determineWinner(locationItems);
+    const winningVibe = determineWinner(vibeItems);
+    const winningWildcard = determineWinner(wildcardItems);
+
+    // Store winners globally for the spinner to use later
+    preselectedWinners = [winningLocation, winningVibe, winningWildcard];
+    console.log("Pre-selected winners:", preselectedWinners);
+
+    // 2. If Player 1, construct the scene and start the first turn orchestrator call immediately
+    if (amIPlayer1) {
+        const winningScene = `${winningLocation} with a ${winningVibe.toLowerCase()} vibe, when suddenly ${winningWildcard.toLowerCase()}.`;
+        console.log("Final winning scene:", winningScene);
+        // This call now runs in the background while the spinner is showing
+        fetchFirstTurn(null, winningScene);
+    }
+
+    // 3. Start the spinner animation for visual effect.
+    // The onComplete callback is now empty because the game flow is no longer driven by the spinner finishing.
     startSpinner(
         [
             { title: 'Location', items: locationItems },
             { title: 'Vibe', items: vibeItems },
             { title: 'Wildcard', items: wildcardItems }
         ],
-        (winningResults) => {
-            if (amIPlayer1) {
-                // Combine the results into a single scene description
-                const winningScene = `${winningResults[0]} with a ${winningResults[1].toLowerCase()} vibe, when suddenly ${winningResults[2].toLowerCase()}.`;
-                console.log("Final winning scene:", winningScene);
-                fetchFirstTurn(null, winningScene);
-            }
+        () => {
+            // This callback is now intentionally empty.
+            console.log("Visual spinner has finished its animation cycle.");
         }
     );
 }
 
 async function fetchFirstTurn(minigameWinner, scene) {
     console.log(`Fetching first turn. Minigame winner: ${minigameWinner}, Scene: ${scene}`);
-    const loadingText = document.getElementById('loading-text');
-    if (loadingText) {
-        loadingText.textContent = 'Inventing a new scenario... Please wait.';
-    }
-    setLoading(true, true); // Use the simple spinner for the first turn
+    // The spinner modal is now the loading indicator, so we don't show another one.
 
     // Load the local profile to provide context to the AI if it exists.
     const localProfile = getLocalProfile();
@@ -3356,9 +3410,10 @@ function populateSpinner(wheelElement, legendElement, spinnerData) {
 }
 
 function runSpinnerAnimation(currentTime) {
-    if (activeSpinners.every(s => !s.isSpinning)) {
-        if (amIPlayer1) endSpinner();
-        return;
+    // The animation loop now continues as long as there are active spinners.
+    // The stop is triggered by `stopSpinnerOnWinners` which sets `isSpinning` to false for all spinners.
+    if (activeSpinners.length === 0 || activeSpinners.every(s => !s.isSpinning)) {
+        return; // Stop the animation loop
     }
 
     const deltaTime = (currentTime - lastSpinnerFrameTime) / 1000;
@@ -3367,46 +3422,31 @@ function runSpinnerAnimation(currentTime) {
     activeSpinners.forEach(spinner => {
         if (!spinner.isSpinning) return;
 
+        // Player 1 is the source of truth for the animation physics
         if (amIPlayer1) {
-            spinner.velocity *= Math.pow(FRICTION, deltaTime * 60);
-            if (Math.abs(spinner.velocity) < MIN_SPINNER_VELOCITY) {
-                spinner.velocity = 0;
-                spinner.isSpinning = false;
-                // Determine result now that it has stopped
-                const totalWeight = spinner.items.reduce((sum, item) => sum + item.weight, 0);
-                const finalAngleDegrees = (spinner.angle * 180 / Math.PI) % 360;
-                const pointerAngle = 270; // 12 o'clock
-                const normalizedAngle = (360 - finalAngleDegrees + pointerAngle) % 360;
-
-                const targetPoint = (normalizedAngle / 360) * totalWeight;
-                let cumulativeWeight = 0;
-                for (const item of spinner.items) {
-                    cumulativeWeight += item.weight;
-                    if (targetPoint <= cumulativeWeight) {
-                        spinner.result = item.text; // Set result to the text of the item
-                        break;
-                    }
-                }
-                console.log(`Spinner ${spinner.id} stopped. Result: ${spinner.result}`);
-
-            } else {
-                 spinner.angle += spinner.velocity * deltaTime;
-            }
+            // The spinner no longer slows down on its own. It spins at a constant rate
+            // until `stopSpinnerOnWinners` is called.
+            spinner.angle += spinner.velocity * deltaTime;
         }
 
-        spinner.wheelElement.style.transform = `rotate(${spinner.angle}rad)`;
+        // Both players rotate the wheel based on the angle. P2 gets updates from P1.
+        if(spinner.wheelElement) {
+            spinner.wheelElement.style.transform = `rotate(${spinner.angle}rad)`;
+        }
     });
 
+    // Player 1 continuously broadcasts the state to Player 2
     if (amIPlayer1) {
         const spinnerStates = activeSpinners.map(s => ({
             id: s.id,
             angle: s.angle,
             isSpinning: s.isSpinning,
-            result: s.result
+            result: s.result // Result is null until the end
         }));
         MPLib.broadcastToRoom({ type: 'spinner_state_update', payload: { spinners: spinnerStates } });
     }
 
+    // Continue the animation loop
     requestAnimationFrame(runSpinnerAnimation);
 }
 
@@ -3471,8 +3511,78 @@ function startSpinner(spinnersData, onComplete) {
 }
 
 
+function stopSpinnerOnWinners() {
+    if (!preselectedWinners) {
+        console.error("stopSpinnerOnWinners called without preselectedWinners. Stopping randomly.");
+        // In a failure case, just let the spinners stop naturally.
+        activeSpinners.forEach(s => s.isSpinning = false); // This will trigger the old stop logic in animation
+        return;
+    }
+
+    console.log("Stopping spinners on pre-selected winners:", preselectedWinners);
+
+    activeSpinners.forEach((spinner, index) => {
+        const winnerText = preselectedWinners[index];
+        if (!winnerText) return;
+
+        const totalWeight = spinner.items.reduce((sum, item) => sum + item.weight, 0);
+        if (totalWeight === 0) return;
+
+        let cumulativeWeight = 0;
+        let winnerSegment = null;
+        for (const item of spinner.items) {
+            const itemWeight = item.weight;
+            if (item.text === winnerText) {
+                winnerSegment = { start: cumulativeWeight, end: cumulativeWeight + itemWeight };
+                break;
+            }
+            cumulativeWeight += itemWeight;
+        }
+
+        if (!winnerSegment) {
+            console.error(`Winner "${winnerText}" not found in spinner ${index}.`);
+            return;
+        }
+
+        // Calculate the angle to the middle of the winning segment
+        const segmentMidpoint = winnerSegment.start + (winnerSegment.end - winnerSegment.start) / 2;
+        const targetPercent = segmentMidpoint / totalWeight;
+
+        // Convert percentage to degrees. 0% is at the top (positive Y-axis), so we adjust.
+        // The pointer is at the top (270deg in a standard coordinate system starting from positive X).
+        // So we want the winning segment's middle to align with the pointer.
+        const targetAngleDegrees = 360 * targetPercent;
+        const pointerOffsetDegrees = 90; // The pointer is at the top, which is effectively a -90 or +270 degree offset from the start of the conic-gradient.
+
+        let finalAngleDegrees = -targetAngleDegrees + pointerOffsetDegrees;
+
+        // Add multiple full rotations to make it look like it's spinning to a stop
+        const currentAngleDegrees = (spinner.angle * 180 / Math.PI) % 360;
+        const fullRotations = 3 + Math.floor(Math.random() * 2); // 3 to 4 extra spins
+        finalAngleDegrees += 360 * fullRotations;
+
+        // Apply a CSS transition for a smooth slowdown
+        spinner.wheelElement.style.transition = 'transform 4s cubic-bezier(0.25, 1, 0.5, 1)';
+        spinner.wheelElement.style.transform = `rotate(${finalAngleDegrees}deg)`;
+
+        // Set the result so it can be highlighted later
+        spinner.result = winnerText;
+        spinner.isSpinning = false; // Mark as no longer spinning
+    });
+
+    // After the transition ends, call endSpinner to hide the modal
+    setTimeout(() => {
+        // Clear the transition property so it doesn't affect future rotations
+        activeSpinners.forEach(s => {
+            if (s.wheelElement) s.wheelElement.style.transition = '';
+        });
+        endSpinner();
+    }, 4000); // Match the duration of the CSS transition
+}
+
 function endSpinner() {
     isSpinnerRunning = false;
+    // The results are now set by stopSpinnerOnWinners, so we just read them
     const finalResults = activeSpinners.map(s => s.result).filter(Boolean);
     console.log("All spinners stopped. Final results:", finalResults);
 
@@ -3495,14 +3605,14 @@ function endSpinner() {
         });
         // --- END NEW ---
 
-        // Hide modal and fire callback after a short delay
+        // Hide modal and fire callback after a short delay to let players see the result
         setTimeout(() => {
             if (spinnerModal) spinnerModal.style.display = 'none';
             if (spinnerCompletionCallback) {
                 spinnerCompletionCallback(finalResults);
             }
             activeSpinners = [];
-        }, 4000); // Increased delay to 4s as per user feedback
+        }, 2000); // Wait 2s after spinners have stopped before hiding the modal
     } else {
         console.error("Mismatch in spinner results. Aborting.");
         setTimeout(() => {
