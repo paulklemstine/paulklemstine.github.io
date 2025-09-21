@@ -1998,7 +1998,6 @@ function startMinigame(onComplete) {
     renderCard(partnerCardElement, null);
 
     playCardBtn.style.display = 'inline-block';
-    endMinigameBtn.style.display = 'none';
     playCardBtn.disabled = false;
 }
 
