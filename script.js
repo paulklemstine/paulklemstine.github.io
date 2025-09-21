@@ -1,5 +1,5 @@
 // Import prompts from the separate file (if still needed for single-player)
-import {geemsPrompts, analyzer_prompt, sceneFeatures, getDynamicSceneOptions, getMinigameActions, getMinigameOutcome} from './prompts.js';
+import {geemsPrompts, analyzer_prompt, sceneFeatures, getDynamicSceneOptions} from './prompts.js';
 import MPLib from './mp.js';
 // Assuming MPLib is globally available after including mp.js or imported if using modules
 // import MPLib from './mp.js'; // Uncomment if using ES6 modules for MPLib
@@ -31,15 +31,95 @@ const MIN_SPINNER_VELOCITY = 0.005;
 // --- Minigame State ---
 let minigameActive = false;
 let minigameCompletionCallback = null;
-let playerMove = null;
-let partnerMove = null;
+let playerMove = null; // Will store the player's card object
+let partnerMove = null; // Will store the partner's card object
 let minigameRound = 1;
 let lastMinigameWinner = null;
-let player1IsInitiator = true;
-let minigameActionData = null; // To hold LLM-generated actions
-let preloadedMinigameData = null; // To preload the *next* turn's actions
 let playerScore = 0;
 let partnerScore = 0;
+let deck = [];
+let playerCard = null;
+let partnerCard = null;
+
+// --- Card Game Constants and Helpers ---
+const CARD_DATA = {
+    'Sweet': {
+        icon: '🍬',
+        color: '#ff8fab',
+        ranks: [
+            'A cute giggle', 'A shy smile', 'A compliment on your outfit', '"You have a great laugh"',
+            'A warm hug', 'Holding hands', '"I feel so comfortable with you"', 'A long, lingering look',
+            'A peck on the cheek', 'A whispered compliment', '"You make me blush"', 'A bouquet of roses',
+            '"I could listen to you talk for hours"'
+        ]
+    },
+    'Spicy': {
+        icon: '🌶️',
+        color: '#dc3545',
+        ranks: [
+            'A suggestive wink', 'A "playful" slap', 'A lingering touch on the knee', '"Is it hot in here?"',
+            'A slow lip bite', '"I was thinking about you..."', 'A dirty joke that lands perfectly',
+            'A "let\'s get out of here" look', 'Whispering in your ear', '"You have no idea..."',
+            'A stolen, passionate kiss', 'A photo "just for you"', '"My place is empty tonight"'
+        ]
+    },
+    'Teasing': {
+        icon: '😏',
+        color: '#6f42c1',
+        ranks: [
+            'An "innocent" question about their weekend', 'A sarcastic compliment', '"You\'re not so bad"',
+            'Stealing a fry from their plate', 'Pretending to not notice them', '"I *guess* you can have my number"',
+            'A playful eye-roll', '"Try to keep up"', 'Ignoring a text for exactly 10 minutes',
+            '"You\'re blushing"', 'Beating them at a game', '"Don\'t get any ideas"', '"We\'ll see about that"'
+        ]
+    },
+    'Romantic': {
+        icon: '🌹',
+        color: '#fd7e14',
+        ranks: [
+            'Opening the door for them', 'Remembering a small detail they told you', '"I saved this dance for you"',
+            'A candlelit dinner', 'A walk on the beach', 'A handwritten note', '"This reminds me of you"',
+            'Sharing a dessert', 'A perfectly curated playlist', '"How was your day?"',
+            'A slow dance in the living room', 'Breakfast in bed', '"I\'ve never met anyone like you"'
+        ]
+    }
+};
+
+function createDeck() {
+    const newDeck = [];
+    for (const category in CARD_DATA) {
+        const categoryData = CARD_DATA[category];
+        for (let i = 0; i < categoryData.ranks.length; i++) {
+            newDeck.push({
+                text: categoryData.ranks[i],
+                category: category,
+                icon: categoryData.icon,
+                color: categoryData.color,
+                value: i
+            });
+        }
+    }
+    return newDeck;
+}
+
+function shuffleDeck(deckToShuffle) {
+    for (let i = deckToShuffle.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deckToShuffle[i], deckToShuffle[j]] = [deckToShuffle[j], deckToShuffle[i]];
+    }
+}
+
+function getCardHTML(card) {
+    if (!card) return '<div class="card-face card-back"></div>';
+    return `
+        <div class="card-face card-front" style="border-color: ${card.color};">
+            <div class="card-category-icon" style="color: ${card.color};">${card.icon}</div>
+            <div class="card-text">${card.text}</div>
+            <div class="card-category-name" style="background-color: ${card.color};">${card.category}</div>
+        </div>
+        <div class="card-face card-back"></div>
+    `;
+}
 
 // --- Model Switching State ---
 const AVAILABLE_MODELS = [
@@ -92,21 +172,15 @@ const debugLogsContainer = document.getElementById('debug-panel-logs');
 // --- Minigame Elements ---
 const minigameModal = document.getElementById('minigame-modal');
 const minigameTitle = document.getElementById('minigame-title');
-const minigameSubtitle = document.getElementById('minigame-subtitle');
 const playerScoreDisplay = document.getElementById('player-score');
 const partnerScoreDisplay = document.getElementById('partner-score');
 const roundResultDisplay = document.getElementById('minigame-round-result');
 const graphicalResultDisplay = document.getElementById('minigame-graphical-result');
 const resultImage = document.getElementById('result-image');
 const resultNarrative = document.getElementById('result-narrative');
-
-const initiatorControls = document.getElementById('initiator-controls');
-const receiverControls = document.getElementById('receiver-controls');
-const initiatorKissButton = document.getElementById('initiator-kiss-button');
-const initiatorHoldHandsButton = document.getElementById('initiator-hold-hands-button');
-const receiverAcceptButton = document.getElementById('receiver-accept-button');
-const receiverLeanAwayButton = document.getElementById('receiver-lean-away-button');
-const receiverTeaseButton = document.getElementById('receiver-tease-button');
+const playCardBtn = document.getElementById('play-card-btn');
+const playerCardElement = document.getElementById('player-card');
+const partnerCardElement = document.getElementById('partner-card');
 
 // --- Spinner Elements ---
 const spinnerModal = document.getElementById('spinner-modal');
@@ -803,17 +877,12 @@ function checkForTurnPackages() {
         initiateTurnAsPlayer1(turnData);
         turnPackages.clear(); // Clear packages for the next turn
 
-        // Player 1 now delegates the minigame generation to Player 2 to run in parallel,
-        // and both players will start the minigame UI immediately.
-        if (partnerRoomId) {
-            console.log("Delegating minigame generation to Player 2 and starting minigame locally.");
-            lastMinigameWinner = null; // Reset for the new game that's about to start.
-            MPLib.sendDirectToRoomPeer(partnerRoomId, { type: 'generate_minigame_data' });
-            startMinigame(minigameCompletionHandler); // P1 starts their minigame UI immediately.
-        } else {
-            console.error("Could not find partner to delegate minigame generation.");
-            // Handle error case, maybe by P1 generating it anyway? For now, just log.
-        }
+        // Both players will start the minigame UI immediately.
+        console.log("Starting minigame locally.");
+        lastMinigameWinner = null; // Reset for the new game that's about to start.
+        startMinigame(minigameCompletionHandler); // P1 starts their minigame UI.
+        // P2 will be started by the 'start_minigame' broadcast.
+        MPLib.broadcastToRoom({ type: 'start_minigame' });
     }
 }
 
@@ -1963,131 +2032,71 @@ function handleRoomPeerLeft(peerId) {
 // --- Minigame Functions ---
 
 async function startMinigame(onComplete) {
-    console.log("Starting 'Make a Move' Minigame UI...");
+    console.log("Starting 'High Card Hearts' Minigame...");
     minigameActive = true;
     minigameCompletionCallback = onComplete;
     minigameRound = 1;
-    playerMove = null;
-    partnerMove = null;
     playerScore = 0;
     partnerScore = 0;
-    player1IsInitiator = true; // Player 1 always starts as the initiator
-    minigameActionData = null; // Clear old data
-    preloadedMinigameData = null; // Clear old data
-
-    if (minigameModal) minigameModal.style.display = 'flex';
-    if (roundResultDisplay) roundResultDisplay.innerHTML = '';
-    if (graphicalResultDisplay) graphicalResultDisplay.classList.add('hidden');
-
-    const previousResultDisplay = document.getElementById('minigame-previous-result');
-    if (previousResultDisplay) {
-        previousResultDisplay.innerHTML = '';
-        previousResultDisplay.classList.add('hidden');
-    }
     updateScoreboard();
 
-    // The UI is now symmetrical. Both players see a loading state.
-    // Player 2 is responsible for generating and broadcasting the data.
-    minigameTitle.textContent = "Make a Move";
-    roundResultDisplay.textContent = "Waiting for game data to be generated...";
+    deck = createDeck();
+    shuffleDeck(deck);
 
-    // Hide controls until data arrives
-    initiatorControls.style.display = 'none';
-    receiverControls.style.display = 'none';
+    if (minigameModal) minigameModal.style.display = 'flex';
+
+    resetRoundUI();
 }
 
-function handlePlayerMove(move) {
-    if (!playerMove) {
-        playerMove = move;
-        setMoveButtonsDisabled(true);
-        // Show the player's selection
-        const moveText = move.replace(/_/g, ' ');
-        roundResultDisplay.innerHTML = `You chose to <strong class="text-indigo-600">${moveText}</strong>. Waiting for partner...`;
-        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_move', payload: { move: move } });
-        checkForRoundCompletion();
-    }
+function playCard() {
+    if (playerMove) return; // Already played
+
+    playerMove = playerCard;
+    playerCardElement.classList.add('flipped');
+    // The getCardHTML function now returns the HTML for BOTH faces of the card.
+    playerCardElement.innerHTML = getCardHTML(playerCard);
+    playCardBtn.disabled = true;
+
+    roundResultDisplay.textContent = "You played your card. Waiting for partner...";
+
+    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_move', payload: { card: playerCard } });
+    checkForRoundCompletion();
 }
 
 function checkForRoundCompletion() {
     if (playerMove && partnerMove) {
-        const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
+        console.log(`Round ${minigameRound} complete. Calculating result...`);
+        let winner = 'draw';
+        let roundMessage = `It's a draw! You both played cards of equal value.`;
 
-        // Only the initiator for the round calculates and broadcasts the result.
-        if (iAmInitiator) {
-            console.log(`Round ${minigameRound} complete. As initiator, calculating result...`);
-            const yourMoveText = playerMove.replace(/_/g, ' ');
-            const partnerMoveText = partnerMove.replace(/_/g, ' ');
-            roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${partnerMoveText}</strong>.<br>Figuring out what happens...`;
-
-            setTimeout(async () => {
-                try {
-                    const context = historyQueue.length > 0 ?
-                        JSON.parse(historyQueue[historyQueue.length - 1].ui).find(el => el.name === 'narrative')?.value || "A date is happening."
-                        : "It's the beginning of the date.";
-
-                    const outcome = await getMinigameOutcome(playerMove, partnerMove, context, isDateExplicit, callGeminiApiWithRetry);
-
-                    let roundMessage = "The outcome is a draw!";
-                    let winner = 'draw';
-                    let newPlayerScore = playerScore;
-                    let newPartnerScore = partnerScore;
-
-                    if (outcome) {
-                        winner = outcome.winner;
-                        if (winner && winner !== 'draw') {
-                            const initiatorIsWinner = winner === 'initiator';
-                            if (initiatorIsWinner) {
-                                newPlayerScore++;
-                                roundMessage = "You won the moment!";
-                            } else {
-                                newPartnerScore++;
-                                roundMessage = "Your partner won the moment.";
-                            }
-                        }
-                    }
-
-                    const resultPayload = {
-                        narrative: outcome?.narrative || "The moment was ambiguous, a draw.",
-                        image_prompt: outcome?.image_prompt || "cinematic anime, two people looking at each other with confusion",
-                        roundMessage: roundMessage,
-                        yourMoveText: yourMoveText,
-                        partnerMoveText: partnerMoveText,
-                        // Send scores from the initiator's perspective
-                        initiatorScore: newPlayerScore,
-                        receiverScore: newPartnerScore
-                    };
-
-                    // Broadcast the definitive result to the partner
-                    MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: resultPayload });
-
-                    // Process the result locally for the initiator
-                    processRoundResult(resultPayload);
-
-                } catch (e) {
-                    console.error("Could not generate round outcome:", e);
-                    const errorPayload = {
-                         narrative: "An error occurred trying to determine the outcome.",
-                         image_prompt: "cinematic anime, a broken mirror, confusion and glitches",
-                         roundMessage: "An error occurred.",
-                         yourMoveText: yourMoveText,
-                         partnerMoveText: partnerMoveText,
-                         initiatorScore: playerScore,
-                         receiverScore: partnerScore
-                    };
-                     MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: errorPayload });
-                     processRoundResult(errorPayload);
-                }
-            }, 1000); // Shortened delay to start result calculation
-        } else {
-             console.log(`Round ${minigameRound} complete. As receiver, waiting for result...`);
+        if (playerMove.value > partnerMove.value) {
+            winner = 'player';
+            playerScore++;
+            roundMessage = `You win! "${playerMove.text}" beats "${partnerMove.text}".`;
+        } else if (partnerMove.value > playerMove.value) {
+            winner = 'partner';
+            partnerScore++;
+            roundMessage = `You lose! "${partnerMove.text}" beats "${playerMove.text}".`;
         }
+
+        const resultPayload = {
+            roundMessage: roundMessage,
+            playerScore: playerScore,
+            partnerScore: partnerScore,
+            partnerCard: partnerMove // Send the partner's card so they can display it
+        };
+
+        // As the initiator of the check, process the result locally
+        processRoundResult(resultPayload);
+
+        // Broadcast the result to the partner
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'minigame_round_result', payload: resultPayload });
     }
 }
 
-
 function endMinigame() {
     minigameActive = false;
-    setMoveButtonsDisabled(true);
+    playCardBtn.disabled = true;
 
     let finalWinner = 'draw';
     if (playerScore > partnerScore) {
@@ -2109,33 +2118,25 @@ function endMinigame() {
 }
 
 function processRoundResult(resultData) {
-    // This function is now called by both the initiator (locally)
-    // and the receiver (via network broadcast) to ensure sync.
+    // This function is called by the player who completes the turn,
+    // and also by the other player when they receive the result.
 
-    if (resultImage && resultNarrative && graphicalResultDisplay) {
-        resultNarrative.textContent = resultData.narrative;
-        const randomSeed = Math.floor(Math.random() * 65536);
-        resultImage.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(resultData.image_prompt)}?nologo=true&safe=false&seed=${randomSeed}`;
-        graphicalResultDisplay.classList.remove('hidden');
-    }
-
-    const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
-    if(iAmInitiator) {
-        playerScore = resultData.initiatorScore;
-        partnerScore = resultData.receiverScore;
-    } else {
-        playerScore = resultData.playerScore;
-        partnerScore = resultData.partnerScore;
-    }
+    // Reveal the partner's card
+    partnerCardElement.classList.add('flipped');
+    const cardToDisplay = partnerMove || resultData.partnerCard;
+    partnerCardElement.innerHTML = getCardHTML(cardToDisplay);
 
 
-    roundResultDisplay.innerHTML = `You chose <strong class="text-indigo-600">${resultData.yourMoveText}</strong>. Your partner chose <strong class="text-pink-600">${resultData.partnerMoveText}</strong>. <br><strong>${resultData.roundMessage}</strong>`;
+    roundResultDisplay.innerHTML = resultData.roundMessage;
+    // The scores are now updated directly in checkForRoundCompletion
     updateScoreboard();
 
+
     minigameRound++;
-    player1IsInitiator = !player1IsInitiator;
-    setTimeout(resetRoundUI, 8000);
+    setTimeout(resetRoundUI, 4000); // Wait 4 seconds before starting the next round
 }
+
+
 function updateScoreboard() {
     if(playerScoreDisplay && partnerScoreDisplay){
         playerScoreDisplay.textContent = playerScore;
@@ -2147,87 +2148,29 @@ function resetRoundUI() {
     playerMove = null;
     partnerMove = null;
 
-    const previousResultDisplay = document.getElementById('minigame-previous-result');
-    // If the graphical result was shown for the round that just ended...
-    if (graphicalResultDisplay && !graphicalResultDisplay.classList.contains('hidden')) {
-        // ...move its content to the "previous result" div and show it.
-        previousResultDisplay.innerHTML = '<h4>Previous Round:</h4>' + graphicalResultDisplay.innerHTML;
-        previousResultDisplay.classList.remove('hidden');
-
-        // NOW, clear the graphical result display and hide it.
-        graphicalResultDisplay.innerHTML = '';
-        graphicalResultDisplay.classList.add('hidden');
+    // Deal new cards
+    if (deck.length < 2) {
+        deck = createDeck();
+        shuffleDeck(deck);
+        console.log("Deck reshuffled.");
     }
+    playerCard = deck.pop();
+    // In a real game, the partner's card would be sent by them. Here we just prepare it.
+    partnerCard = deck.pop();
 
-
-    if (!minigameActionData) {
-        console.warn("resetRoundUI called without minigameActionData.");
-        roundResultDisplay.textContent = "Loading minigame...";
-        return;
+    // Reset UI
+    roundResultDisplay.textContent = `Round ${minigameRound}: Play your card!`;
+    if (playerCardElement) {
+        playerCardElement.classList.remove('flipped');
+        playerCardElement.innerHTML = '<div class="card-face card-back"></div>';
     }
-
-    // Use preloaded data for the next round if it exists
-    if (minigameRound > 1 && preloadedMinigameData) {
-        console.log("Switching to preloaded minigame data for the new round.");
-        minigameActionData = preloadedMinigameData;
-        preloadedMinigameData = null; // Mark as used
-
-        // Asynchronously preload data for the *next* round
-        if (amIPlayer1) {
-            getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
-                preloadedMinigameData = preloadData;
-                MPLib.broadcastToRoom({ type: 'minigame_preload_data', payload: preloadData });
-                console.log("Preloaded data for next round and sent to partner.");
-            });
-        }
+    if (partnerCardElement) {
+        partnerCardElement.classList.remove('flipped');
+        partnerCardElement.innerHTML = '<div class="card-face card-back"></div>';
     }
-
-
-    const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
-    const actionsToShow = iAmInitiator ? minigameActionData.initiator_actions : minigameActionData.receiver_actions;
-    const controlsDiv = iAmInitiator ? initiatorControls : receiverControls;
-    const otherControlsDiv = iAmInitiator ? receiverControls : initiatorControls;
-
-    // Clear existing buttons
-    const buttonContainer = controlsDiv.querySelector('.flex');
-    if (buttonContainer) {
-        buttonContainer.innerHTML = '';
+    if (playCardBtn) {
+        playCardBtn.disabled = false;
     }
-
-    // Shuffle and pick 4 actions
-    const selectedActions = actionsToShow.sort(() => 0.5 - Math.random()).slice(0, 4);
-
-    selectedActions.forEach(actionObj => {
-        const button = document.createElement('button');
-        button.className = 'geems-button minigame-button';
-        const actionText = actionObj.action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        button.textContent = `${actionText} (${actionObj.hint})`;
-        button.onclick = () => handlePlayerMove(actionObj.action);
-        if (buttonContainer) {
-            buttonContainer.appendChild(button);
-        }
-    });
-
-
-    if (iAmInitiator) {
-        roundResultDisplay.textContent = `Round ${minigameRound}: You are the Initiator. Make your move...`;
-        controlsDiv.style.display = 'block';
-        otherControlsDiv.style.display = 'none';
-    } else {
-        roundResultDisplay.textContent = `Round ${minigameRound}: You are the Receiver. Respond to your partner...`;
-        controlsDiv.style.display = 'block';
-        otherControlsDiv.style.display = 'none';
-    }
-
-    setMoveButtonsDisabled(false); // This function will now disable all buttons in both containers
-}
-
-function setMoveButtonsDisabled(disabled) {
-    // Select all buttons within the minigame controls
-    const buttons = document.querySelectorAll('#initiator-controls .minigame-button, #receiver-controls .minigame-button');
-    buttons.forEach(button => {
-        button.disabled = disabled;
-    });
 }
 
 function minigameCompletionHandler(winner) {
@@ -2290,50 +2233,25 @@ function handleRoomDataReceived(senderId, data) {
         // part of the continuous state update. P1 calls endSpinner directly,
         // and P2 calls it when all spinners stop spinning in the state update.
 
-        case 'minigame_data':
-            // This is now received by Player 1 after Player 2 generates and broadcasts it.
-            if (minigameActive && amIPlayer1) {
-                minigameActionData = data.payload;
-                console.log("Player 1 received minigame data broadcast.", minigameActionData);
-                resetRoundUI(); // Now that we have data, setup the UI
-            }
-            break;
-
-        case 'minigame_preload_data':
-            if (minigameActive && !amIPlayer1) {
-                preloadedMinigameData = data.payload;
-                console.log("Received preloaded minigame data for next round.", preloadedMinigameData);
-            }
-            break;
-
         case 'minigame_move':
             if (minigameActive && !partnerMove) {
-                partnerMove = data.payload.move;
-                console.log(`Partner chose ${partnerMove}`);
+                partnerMove = data.payload.card;
+                console.log(`Partner played their card:`, partnerMove);
                 checkForRoundCompletion();
-            }
-            const button = document.querySelector(`.propose-date-button[data-peer-id="${senderId}"]`);
-            if (button) {
-                button.disabled = false;
-                button.textContent = 'Propose Date';
             }
             break;
         case 'minigame_round_result':
-            // The receiver gets the definitive result from the initiator.
-            console.log("Received definitive round result from initiator.");
-            const iAmInitiator = (amIPlayer1 && player1IsInitiator) || (!amIPlayer1 && !player1IsInitiator);
-             if (!iAmInitiator) {
-                // The payload scores are from the initiator's perspective. We need to flip them.
-                const resultData = {
-                    ...data.payload,
-                    // Flip the scores and move text for the receiver's perspective
-                    yourMoveText: data.payload.partnerMoveText,
-                    partnerMoveText: data.payload.yourMoveText,
-                    playerScore: data.payload.receiverScore,
-                    partnerScore: data.payload.initiatorScore,
-                };
-                processRoundResult(resultData);
-            }
+            // The receiver gets the definitive result from the other player.
+            console.log("Received definitive round result from partner.");
+            // We need to process the result, but not re-broadcast it.
+            // The payload scores are already correct from the sender's perspective.
+            // We just need to flip them for our own display.
+            const resultData = {
+                ...data.payload,
+                playerScore: data.payload.partnerScore, // Flip scores
+                partnerScore: data.payload.playerScore
+            };
+            processRoundResult(resultData);
             break;
 
         case 'turn_submission':
@@ -2424,39 +2342,11 @@ function handleRoomDataReceived(senderId, data) {
             showError("The AI is currently overloaded. Please wait a moment and resubmit your turn.");
             setLoading(false); // This will re-enable the submit button and hide loading indicators.
             break;
-        case 'generate_minigame_data':
-            // This message is sent BY Player 1 TO Player 2.
-            // Therefore, only Player 2 should act on it.
+        case 'start_minigame':
+            // Received from P1 to start the minigame on P2's client.
             if (!amIPlayer1) {
-                console.log("Received delegation from Player 1. Starting minigame UI and generating data.");
-                // Player 2 starts the minigame UI immediately, just like Player 1.
+                console.log("Received start_minigame broadcast.");
                 startMinigame(minigameCompletionHandler);
-
-                getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(data => {
-                    if (data) {
-                        console.log("Minigame data generated by Player 2, broadcasting to room...");
-                        // Broadcast the generated data for both players to use.
-                        MPLib.broadcastToRoom({ type: 'minigame_data', payload: data });
-
-                        // Manually process the data locally for Player 2, since broadcast doesn't send to self.
-                        minigameActionData = data;
-                        console.log("Player 2 is processing generated minigame data locally.");
-                        resetRoundUI();
-
-                        // Asynchronously preload data for the next round
-                        getMinigameActions(isDateExplicit, callGeminiApiWithRetry).then(preloadData => {
-                            preloadedMinigameData = preloadData;
-                            // Only Player 2 needs to know about this. No need to broadcast.
-                            console.log("Preloaded data for next minigame round.");
-                        });
-
-                    } else {
-                        showError("Could not generate minigame actions as Player 2.");
-                    }
-                }).catch(err => {
-                    console.error("Error generating minigame actions as Player 2:", err);
-                    showError("Failed to generate minigame actions due to an API error.");
-                });
             }
             break;
         default:
@@ -3211,6 +3101,10 @@ function initializeGame() {
         interstitialScreen.style.display = 'none';
         window.scrollTo(0, 0); // Scroll to top
     });
+
+    if (playCardBtn) {
+        playCardBtn.addEventListener('click', playCard);
+    }
 
     // Hide the game wrapper and show the lobby selection by default
     // This logic might be overridden by loadGameStateFromStorage if there's a saved game
