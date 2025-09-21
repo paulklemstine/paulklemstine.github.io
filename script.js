@@ -2138,17 +2138,12 @@ function handleRoomDataReceived(senderId, data) {
         // and P2 calls it when all spinners stop spinning in the state update.
 
 
-        case 'start_minigame':
-            if (!amIPlayer1) {
-                console.log("Received instruction to start minigame.");
-                startMinigame(() => {});
-            }
-            break;
         case 'minigame_deck':
             if (!amIPlayer1) {
                 deck = data.payload;
                 playerHand = deck.slice(26, 52);
                 partnerHand = deck.slice(0, 26);
+                startMinigame(minigameCompletionHandler);
             }
             break;
         case 'minigame_card':
