@@ -42,19 +42,61 @@ let playerCard = null;
 let partnerCard = null;
 
 // --- Card Game Constants and Helpers ---
-const SUITS = {
-    hearts: '❤️',
-    spades: '💘',
-    diamonds: '💎',
-    clubs: '💌'
+const CARD_DATA = {
+    'Sweet': {
+        icon: '🍬',
+        color: '#ff8fab',
+        ranks: [
+            'A cute giggle', 'A shy smile', 'A compliment on your outfit', '"You have a great laugh"',
+            'A warm hug', 'Holding hands', '"I feel so comfortable with you"', 'A long, lingering look',
+            'A peck on the cheek', 'A whispered compliment', '"You make me blush"', 'A bouquet of roses',
+            '"I could listen to you talk for hours"'
+        ]
+    },
+    'Spicy': {
+        icon: '🌶️',
+        color: '#dc3545',
+        ranks: [
+            'A suggestive wink', 'A "playful" slap', 'A lingering touch on the knee', '"Is it hot in here?"',
+            'A slow lip bite', '"I was thinking about you..."', 'A dirty joke that lands perfectly',
+            'A "let\'s get out of here" look', 'Whispering in your ear', '"You have no idea..."',
+            'A stolen, passionate kiss', 'A photo "just for you"', '"My place is empty tonight"'
+        ]
+    },
+    'Teasing': {
+        icon: '😏',
+        color: '#6f42c1',
+        ranks: [
+            'An "innocent" question about their weekend', 'A sarcastic compliment', '"You\'re not so bad"',
+            'Stealing a fry from their plate', 'Pretending to not notice them', '"I *guess* you can have my number"',
+            'A playful eye-roll', '"Try to keep up"', 'Ignoring a text for exactly 10 minutes',
+            '"You\'re blushing"', 'Beating them at a game', '"Don\'t get any ideas"', '"We\'ll see about that"'
+        ]
+    },
+    'Romantic': {
+        icon: '🌹',
+        color: '#fd7e14',
+        ranks: [
+            'Opening the door for them', 'Remembering a small detail they told you', '"I saved this dance for you"',
+            'A candlelit dinner', 'A walk on the beach', 'A handwritten note', '"This reminds me of you"',
+            'Sharing a dessert', 'A perfectly curated playlist', '"How was your day?"',
+            'A slow dance in the living room', 'Breakfast in bed', '"I\'ve never met anyone like you"'
+        ]
+    }
 };
-const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
 function createDeck() {
     const newDeck = [];
-    for (const suit in SUITS) {
-        for (let i = 0; i < RANKS.length; i++) {
-            newDeck.push({ rank: RANKS[i], suit: suit, value: i });
+    for (const category in CARD_DATA) {
+        const categoryData = CARD_DATA[category];
+        for (let i = 0; i < categoryData.ranks.length; i++) {
+            newDeck.push({
+                text: categoryData.ranks[i],
+                category: category,
+                icon: categoryData.icon,
+                color: categoryData.color,
+                value: i
+            });
         }
     }
     return newDeck;
@@ -68,19 +110,12 @@ function shuffleDeck(deckToShuffle) {
 }
 
 function getCardHTML(card) {
-    if (!card) return '';
-    const suitColor = (card.suit === 'hearts' || card.suit === 'diamonds') ? 'style="color: #dc3545;"' : '';
+    if (!card) return '<div class="card-face card-back"></div>';
     return `
-        <div class="card-face card-front">
-            <div class="top-left">
-                <div class="card-rank">${card.rank}</div>
-                <div class="card-suit" ${suitColor}>${SUITS[card.suit]}</div>
-            </div>
-            <div class="card-suit main-suit" ${suitColor}>${SUITS[card.suit]}</div>
-            <div class="bottom-right">
-                <div class="card-rank">${card.rank}</div>
-                <div class="card-suit" ${suitColor}>${SUITS[card.suit]}</div>
-            </div>
+        <div class="card-face card-front" style="border-color: ${card.color};">
+            <div class="card-category-icon" style="color: ${card.color};">${card.icon}</div>
+            <div class="card-text">${card.text}</div>
+            <div class="card-category-name" style="background-color: ${card.color};">${card.category}</div>
         </div>
         <div class="card-face card-back"></div>
     `;
@@ -2032,16 +2067,16 @@ function checkForRoundCompletion() {
     if (playerMove && partnerMove) {
         console.log(`Round ${minigameRound} complete. Calculating result...`);
         let winner = 'draw';
-        let roundMessage = `It's a draw! Both played a ${playerMove.rank}.`;
+        let roundMessage = `It's a draw! You both played cards of equal value.`;
 
         if (playerMove.value > partnerMove.value) {
             winner = 'player';
             playerScore++;
-            roundMessage = `You win! Your ${playerMove.rank} of ${SUITS[playerMove.suit]} beats a ${partnerMove.rank} of ${SUITS[partnerMove.suit]}.`;
+            roundMessage = `You win! "${playerMove.text}" beats "${partnerMove.text}".`;
         } else if (partnerMove.value > playerMove.value) {
             winner = 'partner';
             partnerScore++;
-            roundMessage = `You lose! Their ${partnerMove.rank} of ${SUITS[partnerMove.suit]} beats your ${playerMove.rank} of ${SUITS[playerMove.suit]}.`;
+            roundMessage = `You lose! "${partnerMove.text}" beats "${playerMove.text}".`;
         }
 
         const resultPayload = {
