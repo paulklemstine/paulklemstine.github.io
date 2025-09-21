@@ -787,12 +787,24 @@ function checkForTurnPackages() {
             minigameWinner: lastMinigameWinner // Use winner from the *previous* turn's minigame
         };
 
-        initiateTurnAsPlayer1(turnData);
-        turnPackages.clear(); // Clear packages for the next turn
+        const onMinigameComplete = (winner) => {
+            console.log(`Minigame is over. Winner: ${winner}. Now generating next turn.`);
+            if (winner === 'draw') {
+                lastMinigameWinner = null;
+            } else if (winner === 'player') {
+                lastMinigameWinner = amIPlayer1 ? 'playerA' : 'playerB';
+            } else if (winner === 'partner') {
+                lastMinigameWinner = amIPlayer1 ? 'playerB' : 'playerA';
+            }
+            console.log(`Stored winner for next turn: ${lastMinigameWinner}`);
+            initiateTurnAsPlayer1(turnData);
+        };
 
-        console.log("Starting minigame.");
-        lastMinigameWinner = null; // Reset for the new game that's about to start.
-        startMinigame(minigameCompletionHandler);
+        console.log("Starting minigame for both players.");
+        MPLib.sendDirectToRoomPeer(currentPartnerId, { type: 'start_minigame' });
+        startMinigame(onMinigameComplete);
+
+        turnPackages.clear();
     }
 }
 
@@ -2126,6 +2138,12 @@ function handleRoomDataReceived(senderId, data) {
         // and P2 calls it when all spinners stop spinning in the state update.
 
 
+        case 'start_minigame':
+            if (!amIPlayer1) {
+                console.log("Received instruction to start minigame.");
+                startMinigame(() => {});
+            }
+            break;
         case 'minigame_deck':
             if (!amIPlayer1) {
                 deck = data.payload;
