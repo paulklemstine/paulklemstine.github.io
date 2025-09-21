@@ -790,7 +790,8 @@ function checkForTurnPackages() {
         initiateTurnAsPlayer1(turnData);
         turnPackages.clear(); // Clear packages for the next turn
 
-        // Start the minigame.
+        console.log("Starting minigame.");
+        lastMinigameWinner = null; // Reset for the new game that's about to start.
         startMinigame(minigameCompletionHandler);
     }
 }
