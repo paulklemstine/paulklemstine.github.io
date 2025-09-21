@@ -835,9 +835,6 @@ async function initiateTurnAsPlayer1(turnData) {
         const orchestratorText = await callGeminiApiWithRetry(orchestratorPrompt, "text/plain");
         currentOrchestratorText = orchestratorText; // Capture the orchestrator output
 
-        // Now that the orchestrator call is complete, the wait is over. End the minigame.
-        endMinigame();
-
         // Send the entire text block to Player 2
         MPLib.sendDirectToRoomPeer(currentPartnerId, {
             type: 'orchestrator_output',
