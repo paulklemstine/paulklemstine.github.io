@@ -790,17 +790,8 @@ function checkForTurnPackages() {
         initiateTurnAsPlayer1(turnData);
         turnPackages.clear(); // Clear packages for the next turn
 
-        // Player 1 now delegates the minigame generation to Player 2 to run in parallel,
-        // and both players will start the minigame UI immediately.
-        if (partnerRoomId) {
-            console.log("Delegating minigame generation to Player 2 and starting minigame locally.");
-            lastMinigameWinner = null; // Reset for the new game that's about to start.
-            MPLib.sendDirectToRoomPeer(partnerRoomId, { type: 'generate_minigame_data' });
-            startMinigame(minigameCompletionHandler); // P1 starts their minigame UI immediately.
-        } else {
-            console.error("Could not find partner to delegate minigame generation.");
-            // Handle error case, maybe by P1 generating it anyway? For now, just log.
-        }
+        // Start the minigame.
+        startMinigame(minigameCompletionHandler);
     }
 }
 
